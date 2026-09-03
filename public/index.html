@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>School Friend Group Chat</title>
+  <meta name="description" content="Real-time web chat application for school friend groups with Express, Socket.IO channels, typing indicators, presence tracking, camera photo capture, customizable themes (Midnight, Ocean, Forest), and Firebase Authentication." />
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Firebase Web SDK v10 (Compat version for Auth) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+
+  <!-- Firebase Modular Firestore SDK (supports custom firestoreDatabaseId) -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js';
+    import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
+
+    window.initModularFirestore = function(config) {
+      if (!config || !config.apiKey || config.apiKey.includes('YOUR_')) return null;
+      try {
+        const app = initializeApp(config, 'modularFirestoreApp');
+        const dbId = config.firestoreDatabaseId;
+        const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+        window.firestoreDb = db;
+        console.log('✅ [Firestore Modular] Initialized with database ID:', dbId || 'default');
+        return db;
+      } catch (e) {
+        console.debug('[Firestore Modular] Note:', e.message);
+        return null;
+      }
+    };
+  </script>
+
+  <!-- Socket.IO Client Library -->
+  <script src="/socket.io/socket.io.js"></script>
+
+  <style>
+    /* Custom scrollbar for modern dark aesthetic */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(71, 85, 105, 1);
+    }
+    @keyframes pulse-subtle {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .typing-dot {
+      animation: pulse-subtle 1.2s infinite ease-in-out;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    /* ---------------------------------------------------- */
+    /* THEME SYSTEM STYLES                                 */
+    /* ---------------------------------------------------- */
+
+    /* Smooth transitions when switching themes */
+    body, #chat-view, aside, main, header, footer, #modal-config > div, #message-input {
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+
+    /* 🌊 Ocean Theme */
+    html.theme-ocean,
+    html.theme-ocean body,
+    html.theme-ocean #chat-view,
+    html.theme-ocean main,
+    html.theme-ocean .bg-slate-950 {
+      background-color: #031326 !important;
+    }
+    html.theme-ocean aside,
+    html.theme-ocean header,
+    html.theme-ocean footer,
+    html.theme-ocean .bg-slate-900,
+    html.theme-ocean #modal-config > div,
+    html.theme-ocean #modal-camera > div {
+      background-color: #071f3d !important;
+    }
+    html.theme-ocean .bg-slate-900\/60,
+    html.theme-ocean .bg-slate-900\/40 {
+      background-color: rgba(7, 31, 61, 0.8) !important;
+    }
+    html.theme-ocean .bg-slate-950\/60,
+    html.theme-ocean .bg-slate-950\/70,
+    html.theme-ocean .bg-slate-950\/80 {
+      background-color: rgba(3, 19, 38, 0.85) !important;
+    }
+    html.theme-ocean .bg-slate-800,
+    html.theme-ocean .bg-slate-800\/80,
+    html.theme-ocean .bg-slate-800\/70,
+    html.theme-ocean .bg-slate-800\/60,
+    html.theme-ocean .bg-slate-800\/40 {
+      background-color: #0d325e !important;
+    }
+    html.theme-ocean .hover\:bg-slate-800:hover,
+    html.theme-ocean .hover\:bg-slate-800\/60:hover,
+    html.theme-ocean .hover\:bg-slate-800\/40:hover,
+    html.theme-ocean .hover\:bg-slate-700:hover,
+    html.theme-ocean .hover\:bg-slate-700\/80:hover {
+      background-color: #124075 !important;
+    }
+    html.theme-ocean .border-slate-800,
+    html.theme-ocean .border-slate-800\/80,
+    html.theme-ocean .border-slate-800\/40,
+    html.theme-ocean .border-slate-700,
+    html.theme-ocean .border-slate-700\/70,
+    html.theme-ocean .border-slate-700\/60 {
+      border-color: #0e3b6f !important;
+    }
+    html.theme-ocean .bg-indigo-600 {
+      background-color: #0284c7 !important;
+    }
+    html.theme-ocean .hover\:bg-indigo-500:hover {
+      background-color: #0ea5e9 !important;
+    }
+    html.theme-ocean .active\:bg-indigo-700:active {
+      background-color: #0369a1 !important;
+    }
+    html.theme-ocean .text-indigo-400,
+    html.theme-ocean .text-indigo-300,
+    html.theme-ocean .hover\:text-indigo-300:hover {
+      color: #38bdf8 !important;
+    }
+    html.theme-ocean .bg-indigo-500\/10,
+    html.theme-ocean .bg-indigo-600\/20 {
+      background-color: rgba(14, 165, 233, 0.18) !important;
+    }
+    html.theme-ocean .border-indigo-500\/20,
+    html.theme-ocean .border-indigo-500\/30,
+    html.theme-ocean .border-indigo-800\/40 {
+      border-color: rgba(14, 165, 233, 0.35) !important;
+    }
+    html.theme-ocean .focus\:ring-indigo-500:focus {
+      --tw-ring-color: #0ea5e9 !important;
+    }
+    html.theme-ocean .shadow-indigo-600\/20,
+    html.theme-ocean .shadow-indigo-600\/30,
+    html.theme-ocean .shadow-indigo-600\/10 {
+      --tw-shadow-color: rgba(14, 165, 233, 0.3) !important;
+    }
+    html.theme-ocean .typing-dot {
+      background-color: #38bdf8 !important;
+    }
+    html.theme-ocean .bg-indigo-600\/30 {
+      background-color: rgba(14, 165, 233, 0.3) !important;
+    }
+    html.theme-ocean .hover\:bg-indigo-600\/20:hover {
+      background-color: rgba(14, 165, 233, 0.2) !important;
+    }
+    html.theme-ocean .text-indigo-200 {
+      color: #bae6fd !important;
+    }
+    html.theme-ocean .border-indigo-500\/50 {
+      border-color: rgba(14, 165, 233, 0.5) !important;
+    }
+    html.theme-ocean input, html.theme-ocean textarea {
+      caret-color: #38bdf8 !important;
+    }
+
+    /* 🌲 Forest Theme */
+    html.theme-forest,
+    html.theme-forest body,
+    html.theme-forest #chat-view,
+    html.theme-forest main,
+    html.theme-forest .bg-slate-950 {
+      background-color: #051910 !important;
+    }
+    html.theme-forest aside,
+    html.theme-forest header,
+    html.theme-forest footer,
+    html.theme-forest .bg-slate-900,
+    html.theme-forest #modal-config > div,
+    html.theme-forest #modal-camera > div {
+      background-color: #0a291b !important;
+    }
+    html.theme-forest .bg-slate-900\/60,
+    html.theme-forest .bg-slate-900\/40 {
+      background-color: rgba(10, 41, 27, 0.8) !important;
+    }
+    html.theme-forest .bg-slate-950\/60,
+    html.theme-forest .bg-slate-950\/70,
+    html.theme-forest .bg-slate-950\/80 {
+      background-color: rgba(5, 25, 16, 0.85) !important;
+    }
+    html.theme-forest .bg-slate-800,
+    html.theme-forest .bg-slate-800\/80,
+    html.theme-forest .bg-slate-800\/70,
+    html.theme-forest .bg-slate-800\/60,
+    html.theme-forest .bg-slate-800\/40 {
+      background-color: #123d2a !important;
+    }
+    html.theme-forest .hover\:bg-slate-800:hover,
+    html.theme-forest .hover\:bg-slate-800\/60:hover,
+    html.theme-forest .hover\:bg-slate-800\/40:hover,
+    html.theme-forest .hover\:bg-slate-700:hover,
+    html.theme-forest .hover\:bg-slate-700\/80:hover {
+      background-color: #185239 !important;
+    }
+    html.theme-forest .border-slate-800,
+    html.theme-forest .border-slate-800\/80,
+    html.theme-forest .border-slate-800\/40,
+    html.theme-forest .border-slate-700,
+    html.theme-forest .border-slate-700\/70,
+    html.theme-forest .border-slate-700\/60 {
+      border-color: #174d35 !important;
+    }
+    html.theme-forest .bg-indigo-600 {
+      background-color: #059669 !important;
+    }
+    html.theme-forest .hover\:bg-indigo-500:hover {
+      background-color: #10b981 !important;
+    }
+    html.theme-forest .active\:bg-indigo-700:active {
+      background-color: #047857 !important;
+    }
+    html.theme-forest .text-indigo-400,
+    html.theme-forest .text-indigo-300,
+    html.theme-forest .hover\:text-indigo-300:hover {
+      color: #34d399 !important;
+    }
+    html.theme-forest .bg-indigo-500\/10,
+    html.theme-forest .bg-indigo-600\/20 {
+      background-color: rgba(16, 185, 129, 0.18) !important;
+    }
+    html.theme-forest .border-indigo-500\/20,
+    html.theme-forest .border-indigo-500\/30,
+    html.theme-forest .border-indigo-800\/40 {
+      border-color: rgba(16, 185, 129, 0.35) !important;
+    }
+    html.theme-forest .focus\:ring-indigo-500:focus {
+      --tw-ring-color: #10b981 !important;
+    }
+    html.theme-forest .shadow-indigo-600\/20,
+    html.theme-forest .shadow-indigo-600\/30,
+    html.theme-forest .shadow-indigo-600\/10 {
+      --tw-shadow-color: rgba(16, 185, 129, 0.3) !important;
+    }
+    html.theme-forest .typing-dot {
+      background-color: #34d399 !important;
+    }
+    html.theme-forest .bg-indigo-600\/30 {
+      background-color: rgba(16, 185, 129, 0.3) !important;
+    }
+    html.theme-forest .hover\:bg-indigo-600\/20:hover {
+      background-color: rgba(16, 185, 129, 0.2) !important;
+    }
+    html.theme-forest .text-indigo-200 {
+      color: #a7f3d0 !important;
+    }
+    html.theme-forest .border-indigo-500\/50 {
+      border-color: rgba(16, 185, 129, 0.5) !important;
+    }
+    html.theme-forest input, html.theme-forest textarea {
+      caret-color: #34d399 !important;
+    }
+  </style>
+</head>
+
+<body class="h-full antialiased font-sans select-none overflow-hidden bg-slate-950">
+
+  <!-- ======================================================= -->
+  <!-- 1. AUTHENTICATION VIEW CONTAINER                        -->
+  <!-- ======================================================= -->
+  <div id="auth-view" class="flex min-h-screen items-center justify-center p-4 sm:p-6 lg:p-8 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-950/40 via-slate-950 to-slate-950">
+    <div class="w-full max-w-md">
+      
+      <!-- Brand & Header -->
+      <div class="text-center mb-6">
+        <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 mb-3 shadow-lg shadow-indigo-500/10">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+            <path d="M6 6h10"></path>
+            <path d="M6 10h10"></path>
+            <path d="M6 14h7"></path>
+          </svg>
+        </div>
+        <h1 class="text-2xl font-bold tracking-tight text-white sm:text-3xl">CampusConnect</h1>
+        <p class="mt-1 text-sm text-slate-400">School Friend Group Real-Time Chat</p>
+      </div>
+
+      <!-- Auth Card -->
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl">
+        
+        <!-- Tab Navigation (Sign In vs. Register) -->
+        <div class="flex rounded-xl bg-slate-950/60 p-1 border border-slate-800/80 mb-6">
+          <button id="tab-signin-btn" type="button" class="flex-1 py-2 text-sm font-semibold rounded-lg transition-all bg-indigo-600 text-white shadow-sm">
+            Sign In
+          </button>
+          <button id="tab-register-btn" type="button" class="flex-1 py-2 text-sm font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
+            Create Account
+          </button>
+        </div>
+
+        <!-- Google Continue Button -->
+        <button id="btn-google-auth" type="button" class="w-full flex items-center justify-center gap-3 py-2.5 px-4 bg-slate-800/80 hover:bg-slate-800 text-white font-medium text-sm rounded-xl border border-slate-700/70 transition-all hover:border-slate-600 shadow-sm active:scale-[0.99]">
+          <svg class="w-4 h-4" viewBox="0 0 24 24">
+            <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"/>
+            <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"/>
+            <path fill="#FBBC05" d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3 0-.8.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12 0 14.8s.7 5.1 1.9 7.5l3.7-2.9c0-.2 0-.4 0-.6z"/>
+            <path fill="#34A853" d="M12 23.5c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16.5C3.7 20.2 7.5 23.5 12 23.5z"/>
+          </svg>
+          Continue with Google
+        </button>
+
+        <div class="relative my-6">
+          <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-800"></div></div>
+          <div class="relative flex justify-center text-xs uppercase"><span class="bg-slate-900 px-3 text-slate-500 font-medium tracking-wider">or with school email</span></div>
+        </div>
+
+        <!-- Auth Form -->
+        <form id="auth-form" class="space-y-4" onsubmit="return false;">
+          <!-- Name Field (Visible on Register) -->
+          <div id="field-name" class="hidden">
+            <label for="input-name" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Full Name</label>
+            <input id="input-name" type="text" placeholder="e.g. Jordan Miller" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+          </div>
+
+          <!-- Email Field -->
+          <div>
+            <label for="input-email" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">School Email</label>
+            <input id="input-email" type="email" required placeholder="alex@school.edu" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+            <p id="email-error" class="hidden mt-1 text-xs text-rose-400"></p>
+          </div>
+
+          <!-- Password Field -->
+          <div>
+            <label for="input-password" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Password</label>
+            <input id="input-password" type="password" required placeholder="Min. 6 characters" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+            <p id="password-error" class="hidden mt-1 text-xs text-rose-400"></p>
+          </div>
+
+          <!-- Error Alert Box -->
+          <div id="auth-error-alert" class="hidden p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2">
+            <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <circle cx="12" cy="12" r="10" stroke-width="2"/>
+              <line x1="12" y1="8" x2="12" y2="12" stroke-width="2"/>
+              <line x1="12" y1="16" x2="12.01" y2="16" stroke-width="2"/>
+            </svg>
+            <span id="auth-error-text">Authentication failed</span>
+          </div>
+
+          <!-- Submit Button -->
+          <button id="btn-submit-auth" type="submit" class="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-indigo-600/20 active:scale-[0.99] flex items-center justify-center gap-2">
+            <span id="submit-button-text">Sign In</span>
+            <svg id="auth-spinner" class="hidden animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          </button>
+        </form>
+
+        <!-- Sandbox & Quick Student Login Section -->
+        <div class="mt-6 pt-5 border-t border-slate-800/80">
+          <div class="flex items-center justify-between mb-2.5">
+            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">⚡ Instant Student Testing</span>
+            <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Ready</span>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">Jump right in with pre-configured student test accounts:</p>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Alex Rivera" data-email="alex@school.edu">
+              <span>🎒</span> Alex
+            </button>
+            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Maya Chen" data-email="maya@school.edu">
+              <span>🔬</span> Maya
+            </button>
+            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Jordan Smith" data-email="jordan@school.edu">
+              <span>🎮</span> Jordan
+            </button>
+          </div>
+        </div>
+
+        <!-- Firebase Config Setup Helper Link -->
+        <div class="mt-4 text-center">
+          <button id="btn-open-config-guide" type="button" class="text-xs text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition">
+            Firebase Project Setup Guide & Credentials Info
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ======================================================= -->
+  <!-- 2. MAIN CHAT WORKSPACE CONTAINER                       -->
+  <!-- ======================================================= -->
+  <div id="chat-view" class="hidden h-screen flex overflow-hidden bg-slate-950">
+
+    <!-- ---------------------------------------------------- -->
+    <!-- LEFT SIDEBAR: Channels, Online Friends, Profile     -->
+    <!-- ---------------------------------------------------- -->
+    <aside id="chat-sidebar" class="w-72 sm:w-80 flex-shrink-0 flex flex-col bg-slate-900 border-r border-slate-800 select-none">
+      
+      <!-- Top Brand Section -->
+      <div class="h-16 px-4 flex items-center justify-between border-b border-slate-800/80 bg-slate-900/60">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-md shadow-indigo-600/30">
+            CC
+          </div>
+          <div>
+            <div class="font-bold text-sm text-white leading-tight">CampusConnect</div>
+            <div class="text-[11px] text-slate-400 flex items-center gap-1.5">
+              <span id="server-connection-dot" class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span id="server-connection-text">Connected</span>
+            </div>
+          </div>
+        </div>
+
+        <button id="btn-open-settings" title="Settings & Theme Preferences" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Channels & Online Friends Scrollable Area -->
+      <div class="flex-1 overflow-y-auto px-3 py-4 space-y-6">
+        
+        <!-- Channels Section -->
+        <div>
+          <div class="px-2 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span>School Channels</span>
+            <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">5</span>
+          </div>
+          <div id="channels-list" class="space-y-1">
+            <!-- Dynamically populated channels -->
+          </div>
+        </div>
+
+        <!-- Direct Messages (DMs) Section -->
+        <div>
+          <div class="px-2 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <div class="flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span>Direct Messages</span>
+            </div>
+            <span id="dm-active-count" class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">0</span>
+          </div>
+          <div id="dm-users-list" class="space-y-1">
+            <p id="dm-empty-hint" class="text-[11px] text-slate-500 italic px-2 py-1">Click any classmate below to start a private chat</p>
+          </div>
+        </div>
+
+        <!-- Online Friends / Classmates Section -->
+        <div>
+          <div class="px-2 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span>Active Classmates</span>
+            <span id="online-users-count" class="text-[11px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono font-medium">1 Online</span>
+          </div>
+          <div id="online-users-list" class="space-y-1">
+            <!-- Dynamically populated online users -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Bottom Profile Bar -->
+      <div class="p-3 border-t border-slate-800/80 bg-slate-950/60">
+        <div class="flex items-center justify-between gap-3">
+          
+          <!-- Avatar and User Info -->
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <div class="relative flex-shrink-0">
+              <img id="my-avatar" src="https://ui-avatars.com/api/?name=Student&background=6366f1&color=fff" alt="User avatar" class="w-9 h-9 rounded-full object-cover border border-slate-700 shadow-sm" />
+              <span id="my-status-indicator" class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900"></span>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div id="my-display-name" class="text-sm font-semibold text-white truncate">Student</div>
+              <div class="flex items-center gap-1.5">
+                <select id="status-selector" class="bg-transparent text-slate-400 text-xs font-medium focus:outline-none cursor-pointer hover:text-slate-200">
+                  <option value="online" class="bg-slate-900 text-slate-200">🟢 Online</option>
+                  <option value="studying" class="bg-slate-900 text-slate-200">📚 Studying</option>
+                  <option value="away" class="bg-slate-900 text-slate-200">🟡 Away</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sign Out Button -->
+          <button id="btn-logout" title="Sign Out" class="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </button>
+
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ---------------------------------------------------- -->
+    <!-- RIGHT MAIN AREA: Chat Window & Input Bar            -->
+    <!-- ---------------------------------------------------- -->
+    <main class="flex-1 flex flex-col min-w-0 bg-slate-950">
+      
+      <!-- Top Chat Header -->
+      <header class="h-16 px-6 border-b border-slate-800/80 bg-slate-900/40 flex items-center justify-between backdrop-blur-md">
+        <div class="flex items-center gap-3 min-w-0">
+          <div id="channel-icon-container" class="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-base flex-shrink-0 relative overflow-hidden">
+            <span id="channel-icon-symbol">#</span>
+            <img id="dm-header-avatar" src="" alt="Direct chat user" class="hidden w-full h-full object-cover" />
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h2 id="current-channel-title" class="text-base font-bold text-white truncate">#general</h2>
+              <span id="channel-occupants-badge" class="px-2 py-0.5 rounded-full text-[11px] bg-slate-800 text-slate-400 font-mono">1 active</span>
+              <button id="btn-back-to-channels" class="hidden text-xs px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 font-medium transition flex items-center gap-1">
+                <span>&larr;</span> Back to Channels
+              </button>
+            </div>
+            <p id="current-channel-topic" class="text-xs text-slate-400 truncate">Campus life, casual chats & announcements</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <!-- Live Room Topic Pill -->
+          <span class="hidden md:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-800/70 border border-slate-700/60 text-slate-300">
+            <span class="w-2 h-2 rounded-full bg-indigo-400 animate-ping"></span>
+            Socket.IO &amp; Firestore
+          </span>
+
+          <!-- Quick Theme Switcher Button (Opens Settings Modal) -->
+          <button id="btn-quick-theme-toggle" type="button" title="Change Theme (Settings)" class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/60 transition cursor-pointer shadow-sm">
+            <span id="current-theme-icon" class="text-sm">🌙</span>
+            <span id="current-theme-name" class="hidden sm:inline font-semibold">Midnight</span>
+            <svg class="w-3.5 h-3.5 text-slate-400 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Scrollable Message Stream Container -->
+      <div id="messages-container" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        <!-- Message elements dynamically rendered here -->
+      </div>
+
+      <!-- Typing Status Text Banner -->
+      <div id="typing-banner" class="h-6 px-6 flex items-center text-xs text-slate-400 italic">
+        <div id="typing-content" class="hidden flex items-center gap-1.5">
+          <span id="typing-text">Someone is typing</span>
+          <span class="inline-flex gap-0.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 typing-dot"></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Bottom Message Input Area -->
+      <footer class="p-4 border-t border-slate-800/80 bg-slate-900/60 relative">
+        
+        <!-- Emoji Picker Popover Menu -->
+        <div id="emoji-picker-popover" class="hidden absolute bottom-full left-4 mb-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-3 z-30 backdrop-blur-xl transition-all">
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+            <div class="flex items-center gap-1 text-xs text-slate-400 font-medium">
+              <span class="text-sm">✨</span>
+              <span>Insert Emoji</span>
+            </div>
+            <div class="flex gap-1">
+              <button type="button" class="emoji-cat-tab active text-xs px-2 py-0.5 rounded bg-indigo-600 text-white" data-category="smileys">😀</button>
+              <button type="button" class="emoji-cat-tab text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white" data-category="school">📚</button>
+              <button type="button" class="emoji-cat-tab text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white" data-category="fun">🎮</button>
+              <button type="button" class="emoji-cat-tab text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white" data-category="hands">👍</button>
+            </div>
+          </div>
+
+          <div id="emoji-picker-grid" class="grid grid-cols-7 gap-1 max-h-48 overflow-y-auto p-1 text-xl">
+            <!-- Dynamically populated emoji buttons -->
+          </div>
+        </div>
+
+        <form id="message-form" class="flex flex-col gap-2" onsubmit="return false;">
+          
+          <!-- Toolbar: Rich Text formatting shortcuts & Quick Emojis -->
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+            <div class="flex items-center gap-1">
+              <span class="text-[11px] text-slate-500 font-medium mr-1">Format:</span>
+              <button type="button" id="btn-format-bold" title="Bold: *text*" class="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold transition">B</button>
+              <button type="button" id="btn-format-italic" title="Italic: _text_" class="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 italic transition">I</button>
+              <button type="button" id="btn-format-strike" title="Strikethrough: ~text~" class="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 line-through transition">S</button>
+              <button type="button" id="btn-format-code" title="Code: `text`" class="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-indigo-300 font-mono transition">&lt;/&gt;</button>
+              
+              <div class="w-px h-3 bg-slate-800 mx-1"></div>
+
+              <!-- Open Emoji Picker Popover Button -->
+              <button type="button" id="btn-toggle-emoji-picker" title="Open Emoji Picker Popover" class="px-2.5 py-0.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 flex items-center gap-1 font-medium transition">
+                <span>😊</span>
+                <span class="text-[10px]">Emoji</span>
+              </button>
+
+              <!-- Take Photo with Camera Button -->
+              <button type="button" id="btn-open-camera" title="Take a photo with camera" class="px-2.5 py-0.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-medium transition cursor-pointer">
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span class="text-[10px]">Photo</span>
+              </button>
+            </div>
+
+            <!-- Quick Emoji shortcuts -->
+            <div class="hidden sm:flex items-center gap-1 text-sm">
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">📚</button>
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">👍</button>
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">🔥</button>
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">🎮</button>
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">🚀</button>
+              <button type="button" class="quick-emoji px-1.5 py-0.5 rounded hover:bg-slate-800 transition">❤️</button>
+            </div>
+          </div>
+
+          <!-- Staged Photo Preview Bar (when a photo is captured or attached) -->
+          <div id="staged-photo-preview" class="hidden p-2.5 rounded-xl bg-slate-900 border border-emerald-500/40 flex items-center justify-between gap-3 shadow-lg">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="relative w-12 h-12 rounded-lg overflow-hidden border border-slate-700 bg-black shrink-0 cursor-pointer" id="btn-staged-img-thumbnail">
+                <img id="staged-photo-img" src="" alt="Captured preview" class="w-full h-full object-cover" />
+                <div class="absolute inset-0 bg-black/20 hover:bg-transparent transition"></div>
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                  <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span>Camera Photo Attached</span>
+                </div>
+                <p class="text-[11px] text-slate-400 truncate">Ready to share with message</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" id="btn-preview-staged-photo" title="Expand preview" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer">Preview</button>
+              <button type="button" id="btn-discard-staged-photo" title="Remove photo" class="p-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition cursor-pointer">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="relative flex items-center">
+            <input 
+              id="message-input" 
+              type="text" 
+              autocomplete="off"
+              placeholder="Message #general... (*bold*, _italic_, `code`)" 
+              class="w-full py-3 pl-4 pr-24 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all shadow-inner"
+            />
+            
+            <div class="absolute right-2 flex items-center gap-1">
+              <button 
+                id="btn-send-message" 
+                type="submit" 
+                class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                <span>Send</span>
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-500 flex items-center justify-between px-1">
+            <span>💡 Supports <code class="text-indigo-400">*bold*</code>, <code class="text-indigo-400">_italic_</code>, <code class="text-indigo-400">~strike~</code>, <code class="text-indigo-400">`code`</code> • Real-time read receipts active</span>
+            <span>Enter to send</span>
+          </div>
+        </form>
+      </footer>
+
+    </main>
+
+  </div>
+
+  <!-- ======================================================= -->
+  <!-- 3. CONFIGURATION & CREDENTIALS SETUP MODAL              -->
+  <!-- ======================================================= -->
+  <div id="modal-config" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div class="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+      
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2 text-white font-bold text-base">
+          <svg class="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          Settings & Preferences
+        </div>
+        <button id="btn-close-modal" class="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-xs text-slate-300 max-h-[65vh] overflow-y-auto pr-1">
+        
+        <!-- THEME SELECTION DROPDOWN SECTION -->
+        <div class="p-4 bg-slate-950/80 rounded-xl border border-slate-800 space-y-3 shadow-inner">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <label for="theme-selector" class="font-semibold text-white text-sm flex items-center gap-2">
+                <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4 5 5 0 015-5c.677 0 1.325.132 1.916.37A6.994 6.994 0 0117 7a7 7 0 017 7c0 2.21-1.045 4.18-2.673 5.441A3.992 3.992 0 0118 21a4 4 0 01-4-4v-1a1 1 0 00-1-1h-2a1 1 0 00-1 1v1a4 4 0 01-3 3.874z" />
+                </svg>
+                Chat Interface Theme
+              </label>
+              <p class="text-[11px] text-slate-400 mt-0.5">Toggle between color themes for your chat workspace</p>
+            </div>
+            
+            <!-- THEME DROPDOWN SELECT -->
+            <div class="relative min-w-[200px]">
+              <select id="theme-selector" class="w-full appearance-none pl-3.5 pr-9 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white font-medium text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer shadow-sm">
+                <option value="midnight">🌙 Midnight (Default)</option>
+                <option value="ocean">🌊 Ocean</option>
+                <option value="forest">🌲 Forest</option>
+              </select>
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Visual Theme Previews / Swatches -->
+          <div class="grid grid-cols-3 gap-2.5 pt-1">
+            <button type="button" class="theme-option-btn p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-1.5" data-theme-val="midnight" id="theme-btn-midnight">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-slate-200 text-xs flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full bg-indigo-500 shadow-sm shadow-indigo-500/50"></span>
+                  Midnight
+                </span>
+                <span class="text-[10px] text-slate-400 font-mono">Current</span>
+              </div>
+              <div class="flex gap-1.5 items-center">
+                <span class="w-4 h-3.5 rounded bg-[#020617] border border-slate-700 shadow-inner" title="Obsidian dark canvas"></span>
+                <span class="w-4 h-3.5 rounded bg-[#0f172a] border border-slate-700 shadow-inner" title="Slate-900 surface"></span>
+                <span class="w-4 h-3.5 rounded bg-indigo-600 shadow-inner" title="Indigo accent"></span>
+              </div>
+            </button>
+
+            <button type="button" class="theme-option-btn p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-1.5" data-theme-val="ocean" id="theme-btn-ocean">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-slate-200 text-xs flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400/50"></span>
+                  Ocean
+                </span>
+                <span class="text-[10px] text-cyan-400/90 font-mono">Marine</span>
+              </div>
+              <div class="flex gap-1.5 items-center">
+                <span class="w-4 h-3.5 rounded bg-[#031326] border border-[#0d3868] shadow-inner" title="Abyssal navy canvas"></span>
+                <span class="w-4 h-3.5 rounded bg-[#071f3d] border border-[#0d3868] shadow-inner" title="Deep ocean surface"></span>
+                <span class="w-4 h-3.5 rounded bg-sky-500 shadow-inner" title="Cyan accent"></span>
+              </div>
+            </button>
+
+            <button type="button" class="theme-option-btn p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-1.5" data-theme-val="forest" id="theme-btn-forest">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-slate-200 text-xs flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50"></span>
+                  Forest
+                </span>
+                <span class="text-[10px] text-emerald-400/90 font-mono">Pine</span>
+              </div>
+              <div class="flex gap-1.5 items-center">
+                <span class="w-4 h-3.5 rounded bg-[#051910] border border-[#174d35] shadow-inner" title="Deep evergreen canvas"></span>
+                <span class="w-4 h-3.5 rounded bg-[#0a291b] border border-[#174d35] shadow-inner" title="Spruce moss surface"></span>
+                <span class="w-4 h-3.5 rounded bg-emerald-500 shadow-inner" title="Emerald accent"></span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div class="p-3 bg-emerald-950/40 rounded-xl border border-emerald-800/40 text-emerald-200">
+          <div class="flex items-center gap-2 font-semibold text-emerald-300 text-sm mb-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            🔥 Firebase Provisioned &amp; Connected
+          </div>
+          <p class="text-[11px] text-emerald-200/90 leading-relaxed">
+            Your Firebase project <strong>gen-lang-client-0577531491</strong> (Firestore region: <code>us-west1</code>) has been successfully provisioned. Real-time rules are deployed and both frontend Firebase Auth &amp; backend Firestore persistence are enabled.
+          </p>
+        </div>
+        
+        <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-[11px] text-slate-300">
+          <div class="text-indigo-400 font-semibold mb-1 font-sans">Active Configuration:</div>
+          <div class="space-y-1 text-slate-400">
+            <div><span class="text-slate-500">Project:</span> gen-lang-client-0577531491</div>
+            <div><span class="text-slate-500">Database ID:</span> ai-studio-campusconnectrea-757c0d50-38de-4e24-a364-dc601baa4c07</div>
+            <div><span class="text-slate-500">Auth Domain:</span> gen-lang-client-0577531491.firebaseapp.com</div>
+          </div>
+        </div>
+
+        <div class="p-3 bg-indigo-950/40 rounded-xl border border-indigo-800/40 text-indigo-200">
+          <span class="font-semibold text-white">⚡ Dual Mode Support:</span>
+          You can sign in with your Google account, create new student accounts with email/password, or use the one-click demo student profiles for instant testing.
+        </div>
+      </div>
+
+      <div class="pt-2 flex justify-end">
+        <button id="btn-modal-dismiss" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-xl transition cursor-pointer">
+          Done
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======================================================= -->
+  <!-- 4. CAMERA CAPTURE & PHOTO PREVIEW MODAL                -->
+  <!-- ======================================================= -->
+  <div id="modal-camera" class="hidden fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md">
+    <div class="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-950/60">
+        <div class="flex items-center gap-2 text-white font-semibold text-sm">
+          <span class="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </span>
+          <span id="camera-modal-title">Take Photo with Camera</span>
+        </div>
+        <button id="btn-close-camera" type="button" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Viewfinder / Preview Container -->
+      <div class="relative bg-black flex-1 min-h-[280px] sm:min-h-[360px] flex items-center justify-center overflow-hidden">
+        
+        <!-- Live Video Viewfinder -->
+        <video id="camera-video" autoplay playsinline muted class="w-full h-full object-cover"></video>
+        
+        <!-- Captured Canvas (hidden helper for snapshot generation) -->
+        <canvas id="camera-canvas" class="hidden"></canvas>
+
+        <!-- Freeze Frame Preview Image (shown when photo is captured) -->
+        <img id="camera-preview-img" src="" alt="Captured snapshot preview" class="hidden w-full h-full object-contain bg-slate-950" />
+
+        <!-- Camera Loading / Permission Banner -->
+        <div id="camera-loading-state" class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+          <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mb-3">
+            <svg class="animate-spin w-6 h-6" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          </div>
+          <p class="text-sm font-medium text-slate-200">Requesting Camera Access...</p>
+          <p class="text-xs text-slate-500 mt-1 max-w-xs">Please allow camera permissions in your browser to take and share photos with your classmates.</p>
+        </div>
+
+        <!-- Camera Error / Fallback State -->
+        <div id="camera-error-state" class="hidden absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+          <div class="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-3">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <p id="camera-error-message" class="text-sm font-medium text-slate-200">Camera Unavailable</p>
+          <p class="text-xs text-slate-400 mt-1 max-w-xs">Grant camera permissions to snap a photo, or choose an image file from your device instead.</p>
+          <div class="flex items-center gap-2 mt-4">
+            <button type="button" id="btn-retry-camera" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition cursor-pointer">Retry Camera</button>
+            <label class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition flex items-center gap-1.5">
+              <span>Choose File</span>
+              <input type="file" id="camera-fallback-file" accept="image/*" class="hidden" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Viewfinder Overlay Elements (Flip camera button) -->
+        <div id="viewfinder-overlay" class="absolute top-3 right-3 flex items-center gap-2">
+          <button type="button" id="btn-flip-camera" title="Flip Camera" class="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center backdrop-blur-md border border-white/20 transition cursor-pointer">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Shutter Flash Animation Overlay -->
+        <div id="camera-flash" class="pointer-events-none absolute inset-0 bg-white opacity-0 transition-opacity duration-150"></div>
+      </div>
+
+      <!-- Controls Bottom Bar -->
+      <div class="p-4 bg-slate-900 border-t border-slate-800">
+        
+        <!-- Live Camera Controls (Before snap) -->
+        <div id="camera-live-controls" class="flex items-center justify-between">
+          <label class="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 cursor-pointer">
+            <svg class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span>Or upload image</span>
+            <input type="file" id="camera-alt-upload" accept="image/*" class="hidden" />
+          </label>
+
+          <!-- Shutter Button -->
+          <button 
+            type="button" 
+            id="btn-snap-photo" 
+            class="group relative w-16 h-16 rounded-full border-4 border-white/80 p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg cursor-pointer"
+            title="Take Photo"
+          >
+            <span class="w-full h-full rounded-full bg-white group-hover:bg-indigo-400 transition-colors"></span>
+          </button>
+
+          <span class="text-xs text-slate-500 font-mono">Tap circle to capture</span>
+        </div>
+
+        <!-- Captured Photo Preview Controls (After snap) -->
+        <div id="camera-preview-controls" class="hidden flex flex-col gap-3">
+          <!-- Optional Caption -->
+          <div class="flex items-center gap-2">
+            <input 
+              type="text" 
+              id="camera-caption-input" 
+              placeholder="Add a caption... (optional)" 
+              class="w-full py-2 px-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div class="flex items-center justify-between gap-2">
+            <button 
+              type="button" 
+              id="btn-retake-photo" 
+              class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Retake</span>
+            </button>
+
+            <div class="flex items-center gap-2">
+              <button 
+                type="button" 
+                id="btn-attach-photo" 
+                class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Attach to Draft</span>
+              </button>
+
+              <button 
+                type="button" 
+                id="btn-send-photo-now" 
+                class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-semibold transition flex items-center gap-1.5 shadow-lg shadow-emerald-600/20 cursor-pointer"
+              >
+                <span>Share in Chat</span>
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======================================================= -->
+  <!-- 5. FULLSCREEN IMAGE LIGHTBOX MODAL                      -->
+  <!-- ======================================================= -->
+  <div id="modal-image-lightbox" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+    <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+      <div class="absolute -top-10 right-0 flex items-center gap-2 z-10">
+        <a id="lightbox-download-link" href="#" download="school-chat-photo.jpg" class="p-1.5 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer" title="Download image">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+        </a>
+        <button id="btn-close-lightbox" type="button" class="p-1.5 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer" title="Close">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <img id="lightbox-image" src="" alt="Full view" class="max-w-full max-h-[80vh] rounded-xl object-contain shadow-2xl border border-slate-800" />
+      <p id="lightbox-caption" class="text-xs text-slate-300 mt-2 text-center max-w-lg"></p>
+    </div>
+  </div>
+
+  <!-- Application Logic -->
+  <script src="/app.js"></script>
+
+</body>
+</html>

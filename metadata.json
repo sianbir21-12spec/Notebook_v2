@@ -1,0 +1,9 @@
+{
+  "name": "School Friend Group Chat",
+  "description": "Real-time web chat application for school friend groups with Express, Socket.IO channels, typing indicators, presence tracking, camera photo capture, customizable themes (Midnight, Ocean, Forest), and Firebase Authentication.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

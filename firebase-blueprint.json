@@ -1,0 +1,133 @@
+{
+  "entities": {
+    "Message": {
+      "title": "Message",
+      "description": "A chat message posted to a school channel or direct message thread",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the message",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Channel identifier or direct message room key",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sender": {
+          "type": "object",
+          "description": "Profile information of the message author"
+        },
+        "content": {
+          "type": "string",
+          "description": "Text body of the chat message",
+          "maxLength": 2000
+        },
+        "image": {
+          "type": "string",
+          "description": "Optional attached camera photo data URL or image link"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds when the message was sent"
+        },
+        "formattedTime": {
+          "type": "string",
+          "description": "Human-readable 12-hour formatted time string",
+          "maxLength": 20
+        },
+        "reactions": {
+          "type": "object",
+          "description": "Map of emoji characters to arrays of user IDs who reacted"
+        },
+        "seenBy": {
+          "type": "array",
+          "description": "List of receipts indicating users who have seen the message"
+        }
+      },
+      "required": ["id", "roomId", "sender", "timestamp"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public profile and status of an enrolled school student",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique Firebase Authentication UID of the student",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the student",
+          "maxLength": 60
+        },
+        "email": {
+          "type": "string",
+          "description": "Student school email address",
+          "maxLength": 120
+        },
+        "picture": {
+          "type": "string",
+          "description": "Avatar image URL"
+        },
+        "status": {
+          "type": "string",
+          "description": "Presence state indicator",
+          "enum": ["online", "away", "studying"]
+        },
+        "lastSeen": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds of last activity"
+        }
+      },
+      "required": ["uid", "name", "email", "status"]
+    },
+    "Channel": {
+      "title": "Channel",
+      "description": "A school topic channel for group discussions",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique channel identifier (e.g. general, homework-help)",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name with hash prefix (e.g. #general)",
+          "maxLength": 64
+        },
+        "topic": {
+          "type": "string",
+          "description": "Description and purpose of the channel",
+          "maxLength": 256
+        },
+        "icon": {
+          "type": "string",
+          "description": "Lucide icon key identifier",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "name", "topic"]
+    }
+  },
+  "firestore": {
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Collection of chat messages across school channels and direct messages"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Collection of student user profiles and status indicators"
+    },
+    "/channels/{channelId}": {
+      "schema": "Channel",
+      "description": "Predefined school channels available to all registered students"
+    }
+  }
+}
