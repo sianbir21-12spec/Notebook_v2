@@ -154,8 +154,14 @@ async function verifyAuthToken(token, clientUser = null) {
         authType: 'firebase-auth'
       };
     } catch (err) {
-      console.warn('Token verification error against Firebase Admin:', err.message);
-      throw new Error(`Firebase token verification failed: ${err.message}`);
+      if (err.code === 'auth/id-token-expired' || err.message?.includes('id-token-expired')) {
+        console.warn('⚠️ [Auth] Client Firebase ID token has expired. Client will auto-refresh.');
+      } else {
+        console.warn('Token verification error against Firebase Admin:', err.message);
+      }
+      const wrappedErr = new Error(`Firebase token verification failed: ${err.message}`);
+      wrappedErr.code = err.code || 'auth/id-token-expired';
+      throw wrappedErr;
     }
   }
 
@@ -1173,6 +1179,53 @@ app.delete('/api/admin/channels/:channelId', requireAdminAuth, async (req, res) 
   }
 });
 
+// 11.5 Campus Lockdown (Lock all channels)
+app.post('/api/admin/campus/lockdown', requireAdminAuth, async (req, res) => {
+  try {
+    const batch = firestoreDb ? firestoreDb.batch() : null;
+    let lockCount = 0;
+
+    for (const channel of CHANNELS) {
+      if (!channel.isLocked) {
+        channel.isLocked = true;
+        lockCount++;
+        if (batch) {
+          const ref = firestoreDb.collection('channels').doc(channel.id);
+          batch.update(ref, { isLocked: true });
+        }
+        // Emit lock status for each channel to update clients instantly
+        io.emit('channel:lock_status', { channelId: channel.id, isLocked: true });
+        // The channel:locked event is also listened to by the client
+        io.emit('channel:locked', { channelId: channel.id, isLocked: true, topic: channel.topic });
+      }
+    }
+
+    if (batch && lockCount > 0) {
+      try {
+        await batch.commit();
+      } catch (e) {
+        console.warn('Firestore lockdown batch commit warning:', e);
+      }
+    }
+
+    await recordAuditLog('LOCK_CHANNEL', req.adminUser, `🚨 Initiated Global Campus Lockdown. Locked ${lockCount} channels.`);
+    
+    // Announce via broadcast as well
+    const broadcast = {
+      title: 'CAMPUS LOCKDOWN',
+      message: 'A campus lockdown has been initiated by administrators. All channels are now in read-only mode.',
+      priority: 'critical',
+      timestamp: Date.now()
+    };
+    activeSystemBroadcast = broadcast;
+    io.emit('admin:system_broadcast', broadcast);
+
+    res.json({ success: true, lockedChannels: lockCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 12. Message Moderation: Search & List Messages
 app.get('/api/admin/messages', requireStaffAuth, (req, res) => {
   const { roomId, query, limit = 50 } = req.query;
@@ -1320,8 +1373,14 @@ io.use(async (socket, next) => {
     socket.user = verifiedUser;
     next();
   } catch (error) {
-    console.error(`❌ Socket authentication error from ${socket.id}:`, error.message);
-    next(new Error(`Unauthorized: ${error.message}`));
+    if (error.code === 'auth/id-token-expired' || error.message?.includes('id-token-expired')) {
+      console.warn(`⚠️ Socket connection refused from ${socket.id}: Firebase ID token expired. Client will auto-refresh.`);
+    } else {
+      console.error(`❌ Socket authentication error from ${socket.id}:`, error.message);
+    }
+    const authErr = new Error(`Unauthorized: ${error.message}`);
+    authErr.data = { code: error.code || 'auth/id-token-expired' };
+    next(authErr);
   }
 });
 

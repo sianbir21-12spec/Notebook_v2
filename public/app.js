@@ -253,6 +253,7 @@ const dom = {
   btnQuickNavBroadcast: document.getElementById('btn-quick-nav-broadcast'),
   btnQuickNavChannels: document.getElementById('btn-quick-nav-channels'),
   btnQuickRefreshOverview: document.getElementById('btn-quick-refresh-overview'),
+  btnLockCampus: document.getElementById('btn-lock-campus'),
   btnQuickClearChat: document.getElementById('btn-quick-clear-chat'),
 
   // Admin Tab: Members
@@ -379,6 +380,21 @@ async function initializeFirebase() {
           handleUserLoggedIn(profile, idToken);
         } else {
           handleUserLoggedOut();
+        }
+      });
+
+      // Automatically sync refreshed tokens when Firebase rotates ID tokens every hour
+      firebase.auth().onIdTokenChanged(async (user) => {
+        if (user) {
+          try {
+            const freshToken = await user.getIdToken();
+            state.authToken = freshToken;
+            if (state.socket && state.socket.auth) {
+              state.socket.auth.token = freshToken;
+            }
+          } catch (tokenErr) {
+            console.warn('Could not sync rotated ID token:', tokenErr);
+          }
         }
       });
     } catch (err) {
@@ -627,6 +643,19 @@ function connectSocket(token, userProfile) {
 
   // Seamless Reconnection handler
   if (state.socket.io) {
+    state.socket.io.on('reconnect_attempt', async () => {
+      // Ensure token is fresh before attempting reconnect
+      if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
+        try {
+          const freshToken = await firebase.auth().currentUser.getIdToken(false);
+          if (freshToken && state.socket) {
+            state.authToken = freshToken;
+            state.socket.auth.token = freshToken;
+          }
+        } catch (e) {}
+      }
+    });
+
     state.socket.io.on('reconnect', () => {
       console.log('🔄 Socket.IO reconnected successfully');
       dom.serverDot.className = 'w-2 h-2 rounded-full bg-emerald-500';
@@ -639,9 +668,39 @@ function connectSocket(token, userProfile) {
     });
   }
 
-  // Connection error
-  state.socket.on('connect_error', (error) => {
+  // Connection error (catches expired token and transparently refreshes)
+  state.socket.on('connect_error', async (error) => {
     console.error('Socket.IO connect error:', error.message);
+
+    const isTokenExpired = error.message && (
+      error.message.toLowerCase().includes('expired') ||
+      error.message.toLowerCase().includes('token') ||
+      error.message.toLowerCase().includes('unauthorized') ||
+      error.message.toLowerCase().includes('auth')
+    );
+
+    if (isTokenExpired && typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
+      try {
+        console.log('🔄 Expired Firebase ID token detected. Force-refreshing token...');
+        dom.serverDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
+        dom.serverText.textContent = 'Refreshing Auth...';
+        const freshToken = await firebase.auth().currentUser.getIdToken(true);
+        if (freshToken) {
+          state.authToken = freshToken;
+          state.socket.auth.token = freshToken;
+          setTimeout(() => {
+            if (state.socket) {
+              console.log('🔄 Re-attempting socket connection with fresh Firebase ID token...');
+              state.socket.connect();
+            }
+          }, 300);
+          return;
+        }
+      } catch (refreshErr) {
+        console.warn('Failed to force-refresh Firebase ID token:', refreshErr);
+      }
+    }
+
     dom.serverDot.className = 'w-2 h-2 rounded-full bg-rose-500';
     dom.serverText.textContent = 'Auth / Conn Error';
   });
@@ -2999,11 +3058,11 @@ function setupEventListeners() {
 // Super-Admin Email Constant
 const PRIMARY_CAMPUS_OWNER_EMAIL = 'sianbirmaken.svkm@gmail.com';
 
-// Secure helper to fetch active auth token
-async function getAuthToken() {
+// Secure helper to fetch active auth token (with optional forceRefresh)
+async function getAuthToken(forceRefresh = false) {
   if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
     try {
-      const token = await firebase.auth().currentUser.getIdToken(false);
+      const token = await firebase.auth().currentUser.getIdToken(Boolean(forceRefresh));
       state.authToken = token;
       return token;
     } catch (e) {
@@ -3014,8 +3073,8 @@ async function getAuthToken() {
 }
 
 // Admin API Fetch Wrapper with Token & Client Identity Authentication
-async function callAdminApi(endpoint, options = {}) {
-  const token = await getAuthToken();
+async function callAdminApi(endpoint, options = {}, isRetry = false) {
+  const token = await getAuthToken(isRetry);
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
@@ -3043,6 +3102,12 @@ async function callAdminApi(endpoint, options = {}) {
     headers,
     body
   });
+
+  if (res.status === 401 && !isRetry) {
+    console.log('🔄 401 Unauthorized encountered in callAdminApi. Refreshing token and retrying...');
+    await getAuthToken(true);
+    return callAdminApi(endpoint, options, true);
+  }
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -3198,11 +3263,11 @@ function switchAdminTab(tabName) {
   // Update Tab Button styles
   if (dom.adminTabBtns) {
     dom.adminTabBtns.forEach(btn => {
-      const btnTab = btn.getAttribute('data-admin-tab');
+      const btnTab = btn.getAttribute('data-tab');
       if (btnTab === tabName) {
-        btn.className = 'admin-tab-btn px-4 py-2 text-xs font-semibold text-indigo-400 bg-slate-800/90 border-b-2 border-indigo-500 rounded-t-lg transition flex items-center gap-1.5';
+        btn.className = 'admin-tab-btn active px-3.5 py-2.5 text-xs font-semibold border-b-2 border-indigo-500 text-indigo-400 flex items-center gap-2 transition whitespace-nowrap cursor-pointer';
       } else {
-        btn.className = 'admin-tab-btn px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-b-2 border-transparent transition flex items-center gap-1.5';
+        btn.className = 'admin-tab-btn px-3.5 py-2.5 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 transition whitespace-nowrap cursor-pointer';
       }
     });
   }
@@ -4047,7 +4112,7 @@ function initAdminConsoleListeners() {
   if (dom.adminTabBtns) {
     dom.adminTabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-admin-tab');
+        const tab = btn.getAttribute('data-tab');
         if (tab) switchAdminTab(tab);
       });
     });
@@ -4062,6 +4127,18 @@ function initAdminConsoleListeners() {
   }
   if (dom.btnQuickRefreshOverview) {
     dom.btnQuickRefreshOverview.addEventListener('click', fetchAdminStats);
+  }
+  if (dom.btnLockCampus) {
+    dom.btnLockCampus.addEventListener('click', () => {
+      if (confirm('🚨 Initiate Campus Lockdown? This will lock all channels in read-only mode for everyone.')) {
+        callAdminApi('/api/admin/campus/lockdown', {
+          method: 'POST'
+        }).then(() => {
+          alert('Campus Lockdown Initiated successfully.');
+          fetchAdminStats();
+        }).catch(e => alert(e.message));
+      }
+    });
   }
   if (dom.btnQuickClearChat) {
     dom.btnQuickClearChat.addEventListener('click', () => {
