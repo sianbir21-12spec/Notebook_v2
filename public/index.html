@@ -620,6 +620,12 @@
         </div>
 
         <div class="flex items-center gap-2">
+          <!-- Campus Arcade Minigame Button -->
+          <button id="btn-open-arcade" type="button" title="Campus Arcade - Take a Break" class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 transition cursor-pointer shadow-sm">
+            <span>🕹️</span>
+            <span class="hidden sm:inline">Arcade</span>
+          </button>
+
           <!-- Staff Admin Console Button (Visible to Admin/Moderator) -->
           <button id="btn-open-admin-panel" type="button" title="Campus Admin Console" class="hidden items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 transition cursor-pointer">
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -770,6 +776,14 @@
           </div>
 
           <div class="relative flex items-center">
+            <!-- Predictive Slash Command Menu -->
+            <div id="slash-command-menu" class="hidden absolute bottom-full mb-3 left-0 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-fade-in z-[60]">
+              <div class="px-3 py-2 border-b border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-950/50">Slash Commands</div>
+              <div id="slash-command-list" class="max-h-48 overflow-y-auto py-1">
+                <!-- Items populated dynamically -->
+              </div>
+            </div>
+            
             <input 
               id="message-input" 
               type="text" 
@@ -1687,6 +1701,52 @@
         </button>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Campus Arcade Modal (Snake Game) -->
+  <div id="modal-arcade" class="hidden fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700/80 w-full max-w-sm rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fade-in relative">
+      <!-- Header -->
+      <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">🕹️</span>
+          <div>
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">Campus Arcade</h3>
+            <p class="text-[11px] text-slate-400">Classic Snake Minigame</p>
+          </div>
+        </div>
+        <button id="btn-close-arcade" class="text-slate-500 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Game Area -->
+      <div class="p-5 flex flex-col items-center space-y-4">
+        <div class="w-full flex justify-between items-center px-1 text-xs font-mono font-bold">
+          <div class="text-indigo-400">SCORE: <span id="snake-score">0</span></div>
+          <div class="text-emerald-400">HIGH: <span id="snake-highscore">0</span></div>
+        </div>
+
+        <div class="relative bg-slate-950 border-2 border-slate-800 rounded-xl overflow-hidden shadow-inner">
+          <canvas id="snake-canvas" width="300" height="300" class="block"></canvas>
+          
+          <!-- Overlay for Start/Game Over -->
+          <div id="snake-overlay" class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center z-10 transition-opacity">
+            <h4 id="snake-overlay-title" class="text-2xl font-black text-white mb-2 tracking-wide">SNAKE</h4>
+            <p id="snake-overlay-msg" class="text-xs text-slate-300 mb-5">Use Arrow Keys or swipe to play</p>
+            <button id="btn-start-snake" class="px-6 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 transition transform hover:scale-105 active:scale-95 cursor-pointer">
+              Play Game
+            </button>
+          </div>
+        </div>
+
+        <p class="text-[10px] text-slate-500 text-center px-4 leading-relaxed">
+          Need a quick break? Play a round of snake! <br/> Also try <span class="font-mono text-indigo-400 font-bold bg-indigo-900/40 px-1 py-0.5 rounded">/roll</span> or <span class="font-mono text-indigo-400 font-bold bg-indigo-900/40 px-1 py-0.5 rounded">/flip</span> in chat!
+        </p>
+      </div>
     </div>
   </div>
 

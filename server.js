@@ -1630,12 +1630,21 @@ io.on('connection', async (socket) => {
       return;
     }
 
-    const trimmedContent = (typeof content === 'string') ? content.trim() : '';
+    let trimmedContent = (typeof content === 'string') ? content.trim() : '';
     const hasImage = typeof image === 'string' && image.startsWith('data:image/') && image.length < 3 * 1024 * 1024;
 
     // Must have either text content or an image attachment
     if (!trimmedContent && !hasImage) return;
     if (trimmedContent.length > 2000) return;
+
+    // --- Interactive Chat Commands (Arcade) ---
+    if (trimmedContent === '/roll') {
+      const rollResult = Math.floor(Math.random() * 100) + 1;
+      trimmedContent = `🎲 rolled a **${rollResult}** (1-100)`;
+    } else if (trimmedContent === '/flip') {
+      const coinResult = Math.random() < 0.5 ? 'Heads' : 'Tails';
+      trimmedContent = `🪙 flipped a coin and got: **${coinResult}**!`;
+    }
 
     const messageObj = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,

@@ -163,6 +163,8 @@ const dom = {
   messageForm: document.getElementById('message-form'),
   messageInput: document.getElementById('message-input'),
   btnSendMessage: document.getElementById('btn-send-message'),
+  slashCommandMenu: document.getElementById('slash-command-menu'),
+  slashCommandList: document.getElementById('slash-command-list'),
   quickEmojis: document.querySelectorAll('.quick-emoji'),
 
   // Rich Text Formatting & Emoji Picker
@@ -231,6 +233,19 @@ const dom = {
   myRoleBadge: document.getElementById('my-role-badge'),
   channelLockedBadge: document.getElementById('channel-locked-badge'),
   systemBroadcastBanner: document.getElementById('system-broadcast-banner'),
+  
+  // Arcade Minigames
+  btnOpenArcade: document.getElementById('btn-open-arcade'),
+  btnCloseArcade: document.getElementById('btn-close-arcade'),
+  modalArcade: document.getElementById('modal-arcade'),
+  btnStartSnake: document.getElementById('btn-start-snake'),
+  snakeCanvas: document.getElementById('snake-canvas'),
+  snakeScore: document.getElementById('snake-score'),
+  snakeHighscore: document.getElementById('snake-highscore'),
+  snakeOverlay: document.getElementById('snake-overlay'),
+  snakeOverlayTitle: document.getElementById('snake-overlay-title'),
+  snakeOverlayMsg: document.getElementById('snake-overlay-msg'),
+
   broadcastPriorityIcon: document.getElementById('broadcast-priority-icon'),
   broadcastTitle: document.getElementById('broadcast-title'),
   broadcastMessage: document.getElementById('broadcast-message'),
@@ -797,19 +812,27 @@ function connectSocket(token, userProfile) {
       appendMessageToChat(message, true);
       scrollToBottom();
       checkAndMarkMessagesRead();
+
+      // Mention notification
+      const isFromMe = state.currentUser && message.sender && message.sender.uid === state.currentUser.uid;
+      if (!isFromMe && state.currentUser?.name && message.content && message.content.toLowerCase().includes(`@${state.currentUser.name.toLowerCase()}`)) {
+        appendSystemNotice(`🔔 You were mentioned by <strong>${message.sender?.name || 'Classmate'}</strong>!`);
+        // Optional: Play a tiny ping sound (if supported/desired)
+        try { new Audio('data:audio/wav;base64,UklGRi4AAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQoAAAB2/3X/df91/3X/').play(); } catch(e){}
+      }
     } else {
       // Check if message is a direct message
       if (message.roomId.startsWith('dm_')) {
         const sender = message.sender;
         if (!state.activeDirectMessages.has(sender.uid)) {
-          state.activeDirectMessages.set(sender.uid, {
-            uid: sender.uid,
-            name: sender.name,
-            email: sender.email,
-            picture: sender.avatar,
-            status: 'online',
-            unreadCount: 1
-          });
+           state.activeDirectMessages.set(sender.uid, {
+             uid: sender.uid,
+             name: sender.name,
+             email: sender.email,
+             picture: sender.avatar,
+             status: 'online',
+             unreadCount: 1
+           });
         } else {
           const dm = state.activeDirectMessages.get(sender.uid);
           dm.unreadCount = (dm.unreadCount || 0) + 1;
@@ -830,6 +853,11 @@ function connectSocket(token, userProfile) {
           state.unreadCounts[message.roomId] = (state.unreadCounts[message.roomId] || 0) + 1;
           renderChannelsList();
           updateDocumentTitleWithUnreads();
+
+          // Mention notification from another channel
+          if (state.currentUser?.name && message.content && message.content.toLowerCase().includes(`@${state.currentUser.name.toLowerCase()}`)) {
+            appendSystemNotice(`🔔 You were mentioned in #${message.roomId} by <strong>${message.sender?.name || 'Classmate'}</strong>!`);
+          }
         }
       }
     }
@@ -1442,7 +1470,7 @@ function renderOnlineUsers(users) {
 // ==================================================================
 // 9. RICH TEXT FORMATTING & PARSING
 // ==================================================================
-function renderFormattedText(text) {
+function renderFormattedText(text, currentUserName = '') {
   if (!text) return '';
   // 1. Sanitize HTML to prevent XSS
   let safe = text
@@ -1466,7 +1494,24 @@ function renderFormattedText(text) {
   safe = safe.replace(/~~([^~]+)~~/g, '<del class="line-through text-slate-400">$1</del>');
   safe = safe.replace(/~([^~]+)~/g, '<del class="line-through text-slate-400">$1</del>');
 
-  // 6. URLs: autolink
+  // 6. Mentions: @username
+  if (currentUserName) {
+    // Escape username for regex
+    const escapedName = currentUserName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const myMentionRegex = new RegExp(`@(${escapedName})\\b`, 'gi');
+    
+    // Check if I am mentioned, highlight distinctly
+    safe = safe.replace(myMentionRegex, '<span class="bg-indigo-500 text-white font-bold px-1.5 py-0.5 rounded-md shadow-sm shadow-indigo-500/50">@$1</span>');
+  }
+  
+  // General mentions (not me)
+  safe = safe.replace(/@([a-zA-Z0-9_.\-]+)/g, (match, username) => {
+    // If it was already highlighted as my mention, it will have HTML in it, so skip it by checking if it contains <span
+    if (match.includes('<span')) return match; 
+    return `<span class="text-indigo-400 font-bold px-1 rounded-sm bg-indigo-500/10">@${username}</span>`;
+  });
+
+  // 7. URLs: autolink
   safe = safe.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" class="underline text-indigo-400 hover:text-indigo-200 break-all">$1</a>');
 
   return safe;
@@ -1641,13 +1686,20 @@ function appendMessageToChat(message, animate = false) {
 
   // Bubble content with rich text formatting (if text content present)
   if (message.content && message.content.trim()) {
+    const isMentioned = state.currentUser?.name && message.content.toLowerCase().includes(`@${state.currentUser.name.toLowerCase()}`);
+    
+    // If mentioned, tint the background slightly
+    if (isMentioned && !isMe) {
+      msgWrapper.classList.add('bg-indigo-900/30', 'rounded-xl', 'p-1', '-mx-1', 'border', 'border-indigo-500/20');
+    }
+
     const bubble = document.createElement('div');
     bubble.className = `px-4 py-2.5 text-sm rounded-2xl break-words leading-relaxed shadow-sm ${
       isMe 
         ? 'bg-indigo-600 text-white rounded-tr-none shadow-indigo-600/10' 
-        : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none'
+        : (isMentioned ? 'bg-slate-800/80 border border-indigo-500/50 text-slate-100 rounded-tl-none shadow-indigo-900/20 shadow-lg' : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none')
     }`;
-    bubble.innerHTML = renderFormattedText(message.content);
+    bubble.innerHTML = renderFormattedText(message.content, state.currentUser?.name);
     contentWrapper.appendChild(bubble);
   }
 
@@ -2376,10 +2428,33 @@ function formatClientTimestamp(timestamp = Date.now()) {
 
 // Handle sending message with instant optimistic local rendering
 function sendMessage() {
-  const content = dom.messageInput.value.trim();
+  let content = dom.messageInput.value.trim();
   const image = state.stagedImage;
 
   if ((!content && !image) || !state.socket || !state.currentUser) return;
+
+  // Intercept client-side commands
+  if (content === '/clear') {
+    state.messages = [];
+    state.roomCaches[state.currentRoom] = [];
+    dom.messagesContainer.innerHTML = '';
+    dom.messageInput.value = '';
+    appendSystemNotice('🧹 Local chat history cleared.');
+    return;
+  }
+  if (content === '/help') {
+    dom.messageInput.value = '';
+    appendSystemNotice('🤖 **Available Commands:**\n`/help` - Show this message\n`/clear` - Clear local history\n`/roll` - Roll a random number (1-100)\n`/flip` - Flip a coin\n`/gif [query]` - Send a GIF placeholder');
+    return;
+  }
+
+  // Intercept client-side mock GIF
+  if (content.startsWith('/gif ')) {
+    const query = content.substring(5).trim();
+    if (query) {
+       content = `🎬 **GIF Request:** "${query}"\n*(GIF feature placeholder)*`;
+    }
+  }
 
   // Moderation checks
   if (state.isBanned) {
@@ -4221,6 +4296,273 @@ function initAdminConsoleListeners() {
   }
 }
 
+// ==========================================
+// CAMPUS ARCADE: SNAKE MINIGAME
+// ==========================================
+let snakeGameInterval = null;
+let snakeGameState = {
+  snake: [{ x: 10, y: 10 }],
+  food: { x: 5, y: 5 },
+  dx: 1,
+  dy: 0,
+  score: 0,
+  highScore: parseInt(localStorage.getItem('campus_snake_highscore')) || 0,
+  isGameOver: false,
+  gridSize: 15,
+  tileCount: 20
+};
+
+function drawSnakeGame() {
+  if (!dom.snakeCanvas) return;
+  const ctx = dom.snakeCanvas.getContext('2d');
+  
+  // Clear canvas
+  ctx.fillStyle = '#020617'; // slate-950
+  ctx.fillRect(0, 0, dom.snakeCanvas.width, dom.snakeCanvas.height);
+  
+  // Move snake
+  const head = { x: snakeGameState.snake[0].x + snakeGameState.dx, y: snakeGameState.snake[0].y + snakeGameState.dy };
+  
+  // Check wall collision
+  if (head.x < 0 || head.x >= snakeGameState.tileCount || head.y < 0 || head.y >= snakeGameState.tileCount) {
+    handleSnakeGameOver();
+    return;
+  }
+  
+  // Check self collision
+  for (let i = 0; i < snakeGameState.snake.length; i++) {
+    if (head.x === snakeGameState.snake[i].x && head.y === snakeGameState.snake[i].y) {
+      handleSnakeGameOver();
+      return;
+    }
+  }
+  
+  snakeGameState.snake.unshift(head);
+  
+  // Check food collision
+  if (head.x === snakeGameState.food.x && head.y === snakeGameState.food.y) {
+    snakeGameState.score += 10;
+    if (dom.snakeScore) dom.snakeScore.textContent = snakeGameState.score;
+    if (snakeGameState.score > snakeGameState.highScore) {
+      snakeGameState.highScore = snakeGameState.score;
+      localStorage.setItem('campus_snake_highscore', snakeGameState.highScore);
+      if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
+    }
+    // Spawn new food
+    snakeGameState.food = {
+      x: Math.floor(Math.random() * snakeGameState.tileCount),
+      y: Math.floor(Math.random() * snakeGameState.tileCount)
+    };
+  } else {
+    snakeGameState.snake.pop(); // Remove tail if no food eaten
+  }
+  
+  // Draw Food
+  ctx.fillStyle = '#f43f5e'; // rose-500
+  ctx.fillRect(snakeGameState.food.x * snakeGameState.gridSize, snakeGameState.food.y * snakeGameState.gridSize, snakeGameState.gridSize - 1, snakeGameState.gridSize - 1);
+  
+  // Draw Snake
+  ctx.fillStyle = '#4ade80'; // emerald-400
+  snakeGameState.snake.forEach((part, index) => {
+    ctx.fillStyle = index === 0 ? '#34d399' : '#10b981'; // Lighter head
+    ctx.fillRect(part.x * snakeGameState.gridSize, part.y * snakeGameState.gridSize, snakeGameState.gridSize - 1, snakeGameState.gridSize - 1);
+  });
+}
+
+function handleSnakeGameOver() {
+  clearInterval(snakeGameInterval);
+  snakeGameInterval = null;
+  snakeGameState.isGameOver = true;
+  
+  if (dom.snakeOverlay) {
+    dom.snakeOverlay.classList.remove('hidden');
+    if (dom.snakeOverlayTitle) dom.snakeOverlayTitle.textContent = 'GAME OVER';
+    if (dom.snakeOverlayMsg) dom.snakeOverlayMsg.textContent = `Final Score: ${snakeGameState.score}`;
+    if (dom.btnStartSnake) dom.btnStartSnake.textContent = 'Play Again';
+  }
+}
+
+function startSnakeGame() {
+  if (dom.snakeOverlay) dom.snakeOverlay.classList.add('hidden');
+  
+  snakeGameState = {
+    snake: [{ x: 10, y: 10 }],
+    food: {
+      x: Math.floor(Math.random() * 20),
+      y: Math.floor(Math.random() * 20)
+    },
+    dx: 1,
+    dy: 0,
+    score: 0,
+    highScore: parseInt(localStorage.getItem('campus_snake_highscore')) || 0,
+    isGameOver: false,
+    gridSize: 15,
+    tileCount: 20
+  };
+  
+  if (dom.snakeScore) dom.snakeScore.textContent = '0';
+  if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
+  
+  if (snakeGameInterval) clearInterval(snakeGameInterval);
+  snakeGameInterval = setInterval(drawSnakeGame, 100); // 10 FPS
+}
+
+function setupSnakeControls() {
+  if (dom.btnOpenArcade) {
+    dom.btnOpenArcade.addEventListener('click', () => {
+      if (dom.modalArcade) dom.modalArcade.classList.remove('hidden');
+      if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
+    });
+  }
+  
+  if (dom.btnCloseArcade) {
+    dom.btnCloseArcade.addEventListener('click', () => {
+      if (dom.modalArcade) dom.modalArcade.classList.add('hidden');
+      if (snakeGameInterval) clearInterval(snakeGameInterval);
+      if (dom.snakeOverlay) dom.snakeOverlay.classList.remove('hidden');
+      if (dom.snakeOverlayTitle) dom.snakeOverlayTitle.textContent = 'SNAKE';
+      if (dom.snakeOverlayMsg) dom.snakeOverlayMsg.textContent = 'Use Arrow Keys to play';
+      if (dom.btnStartSnake) dom.btnStartSnake.textContent = 'Play Game';
+    });
+  }
+  
+  if (dom.btnStartSnake) {
+    dom.btnStartSnake.addEventListener('click', startSnakeGame);
+  }
+  
+  window.addEventListener('keydown', (e) => {
+    // Only capture arrows if arcade modal is open
+    if (dom.modalArcade && !dom.modalArcade.classList.contains('hidden')) {
+      // Prevent default scrolling
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+      }
+      
+      switch (e.key) {
+        case 'ArrowUp':
+          if (snakeGameState.dy !== 1) { snakeGameState.dx = 0; snakeGameState.dy = -1; }
+          break;
+        case 'ArrowDown':
+          if (snakeGameState.dy !== -1) { snakeGameState.dx = 0; snakeGameState.dy = 1; }
+          break;
+        case 'ArrowLeft':
+          if (snakeGameState.dx !== 1) { snakeGameState.dx = -1; snakeGameState.dy = 0; }
+          break;
+        case 'ArrowRight':
+          if (snakeGameState.dx !== -1) { snakeGameState.dx = 1; snakeGameState.dy = 0; }
+          break;
+      }
+    }
+  });
+}
+
+// ==========================================
+// SLASH COMMANDS
+// ==========================================
+const SLASH_COMMANDS = [
+  { cmd: '/gif', desc: 'Send a GIF (e.g. /gif cats)' },
+  { cmd: '/clear', desc: 'Clear local chat history' },
+  { cmd: '/help', desc: 'Show available commands' },
+  { cmd: '/roll', desc: 'Roll a random number (1-100)' },
+  { cmd: '/flip', desc: 'Flip a coin' }
+];
+
+let commandMenuIndex = -1;
+let filteredCommands = [];
+
+function setupSlashCommands() {
+  if (!dom.messageInput || !dom.slashCommandMenu) return;
+
+  dom.messageInput.addEventListener('input', (e) => {
+    const val = e.target.value;
+    if (val.startsWith('/')) {
+      const query = val.toLowerCase().substring(1).split(' ')[0]; // support filtering by letters after /
+      // If there's a space, they've already typed the command. 
+      if (val.includes(' ')) {
+        closeCommandMenu();
+        return;
+      }
+      filteredCommands = SLASH_COMMANDS.filter(c => c.cmd.startsWith('/' + query));
+      if (filteredCommands.length > 0) {
+        openCommandMenu();
+        renderCommandMenu();
+      } else {
+        closeCommandMenu();
+      }
+    } else {
+      closeCommandMenu();
+    }
+  });
+
+  dom.messageInput.addEventListener('blur', () => {
+    // Slight delay to allow clicking on the menu items before hiding
+    setTimeout(closeCommandMenu, 150);
+  });
+
+  dom.messageInput.addEventListener('keydown', (e) => {
+    if (dom.slashCommandMenu.classList.contains('hidden')) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      commandMenuIndex = (commandMenuIndex + 1) % filteredCommands.length;
+      renderCommandMenu();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      commandMenuIndex = (commandMenuIndex - 1 + filteredCommands.length) % filteredCommands.length;
+      renderCommandMenu();
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      if (commandMenuIndex >= 0 && commandMenuIndex < filteredCommands.length) {
+        selectCommand(filteredCommands[commandMenuIndex].cmd);
+      } else if (filteredCommands.length > 0) {
+        selectCommand(filteredCommands[0].cmd);
+      }
+    } else if (e.key === 'Escape') {
+      closeCommandMenu();
+    }
+  });
+}
+
+function openCommandMenu() {
+  dom.slashCommandMenu.classList.remove('hidden');
+  commandMenuIndex = 0;
+}
+
+function closeCommandMenu() {
+  dom.slashCommandMenu.classList.add('hidden');
+  commandMenuIndex = -1;
+}
+
+function renderCommandMenu() {
+  if (!dom.slashCommandList) return;
+  dom.slashCommandList.innerHTML = '';
+  filteredCommands.forEach((c, idx) => {
+    const item = document.createElement('div');
+    const isActive = idx === commandMenuIndex;
+    item.className = `px-3 py-2 cursor-pointer flex justify-between items-center transition ${isActive ? 'bg-indigo-600' : 'hover:bg-slate-800'}`;
+    item.innerHTML = `
+      <span class="text-white font-mono text-xs font-bold">${c.cmd}</span>
+      <span class="${isActive ? 'text-indigo-200' : 'text-slate-400'} text-[10px] truncate ml-3">${c.desc}</span>
+    `;
+    item.addEventListener('mousedown', (e) => {
+      // mousedown instead of click to prevent input blur
+      e.preventDefault();
+      selectCommand(c.cmd);
+    });
+    // Optional: auto-scroll to the selected item if overflowed
+    if (isActive) {
+      item.scrollIntoView({ block: 'nearest' });
+    }
+    dom.slashCommandList.appendChild(item);
+  });
+}
+
+function selectCommand(cmd) {
+  dom.messageInput.value = cmd + ' ';
+  closeCommandMenu();
+  dom.messageInput.focus();
+}
+
 // Initial Boot
 document.addEventListener('DOMContentLoaded', () => {
   // Purge any legacy demo/sandbox cache keys
@@ -4237,5 +4579,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initTheme();
   setupEventListeners();
+  setupSlashCommands();
+  setupSnakeControls();
   initializeFirebase();
 });
