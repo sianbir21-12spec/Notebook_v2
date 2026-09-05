@@ -627,7 +627,7 @@ function connectSocket(token, userProfile) {
       if (!state.roomCaches[state.currentRoom]) state.roomCaches[state.currentRoom] = [];
       state.roomCaches[state.currentRoom].push(message);
 
-      appendMessageToChat(message);
+      appendMessageToChat(message, true);
       scrollToBottom();
       checkAndMarkMessagesRead();
     } else {
@@ -1176,7 +1176,7 @@ function renderMessagesList(messages) {
       : `This is the start of the #${state.currentRoom} channel. Say hello to your classmates!`;
 
     dom.messagesContainer.innerHTML = `
-      <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
+      <div id="empty-channel-placeholder" class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
         <div class="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-indigo-400 mb-2">
           ${state.isDirectMessage ? '💬' : '#'}
         </div>
@@ -1187,18 +1187,30 @@ function renderMessagesList(messages) {
     return;
   }
 
-  messages.forEach(msg => appendMessageToChat(msg));
+  messages.forEach(msg => appendMessageToChat(msg, false));
   scrollToBottom();
 }
 
-function appendMessageToChat(message) {
+function appendMessageToChat(message, animate = false) {
   const isMe = state.currentUser && message.sender && message.sender.uid === state.currentUser.uid;
   
+  // If the messagesContainer currently contains the empty room placeholder, remove it
+  const emptyPlaceholder = document.getElementById('empty-channel-placeholder');
+  if (emptyPlaceholder) {
+    emptyPlaceholder.remove();
+  }
+
   const msgWrapper = document.createElement('div');
   msgWrapper.id = `msg-row-${message.id}`;
   msgWrapper.dataset.msgId = message.id;
   msgWrapper.dataset.senderUid = message.sender?.uid || '';
-  msgWrapper.className = `relative flex gap-3 max-w-3xl ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'} group my-2 chat-message-row`;
+  msgWrapper.className = `relative flex gap-3 max-w-3xl ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'} group my-2 chat-message-row ${animate ? 'animate-slide-in-up' : ''}`;
+
+  if (animate) {
+    msgWrapper.addEventListener('animationend', () => {
+      msgWrapper.classList.remove('animate-slide-in-up');
+    }, { once: true });
+  }
 
   // Floating Message Action Bar (Reactions)
   const actionBar = buildMessageActionBar(message);
@@ -1971,7 +1983,7 @@ function sendMessage() {
     state.roomCaches[state.currentRoom] = [];
   }
   state.roomCaches[state.currentRoom].push(optimisticMsg);
-  appendMessageToChat(optimisticMsg);
+  appendMessageToChat(optimisticMsg, true);
   scrollToBottom();
 
   // 2. Clear inputs immediately
