@@ -75,6 +75,20 @@ const state = {
     stagedPicture: null,
     selectedPresetId: null,
     isSaving: false
+  },
+
+  // Campus Administration & Moderation State
+  userRole: 'student', // 'admin' | 'moderator' | 'student'
+  isMuted: false,
+  isBanned: false,
+  activeSystemBroadcast: null,
+  adminActiveTab: 'overview',
+  adminData: {
+    members: [],
+    channels: [],
+    messages: [],
+    auditLogs: [],
+    stats: null
   }
 };
 
@@ -210,7 +224,79 @@ const dom = {
   lightboxImage: document.getElementById('lightbox-image'),
   lightboxCaption: document.getElementById('lightbox-caption'),
   lightboxDownloadLink: document.getElementById('lightbox-download-link'),
-  btnCloseLightbox: document.getElementById('btn-close-lightbox')
+  btnCloseLightbox: document.getElementById('btn-close-lightbox'),
+
+  // Campus Admin Console & Moderation UI
+  btnOpenAdminPanel: document.getElementById('btn-open-admin-panel'),
+  myRoleBadge: document.getElementById('my-role-badge'),
+  channelLockedBadge: document.getElementById('channel-locked-badge'),
+  systemBroadcastBanner: document.getElementById('system-broadcast-banner'),
+  broadcastPriorityIcon: document.getElementById('broadcast-priority-icon'),
+  broadcastTitle: document.getElementById('broadcast-title'),
+  broadcastMessage: document.getElementById('broadcast-message'),
+  btnDismissBroadcast: document.getElementById('btn-dismiss-broadcast'),
+  modalAdmin: document.getElementById('modal-admin'),
+  btnCloseAdminPanel: document.getElementById('btn-close-admin-panel'),
+  btnDismissAdminModal: document.getElementById('btn-dismiss-admin-modal'),
+  adminModalRoleBadge: document.getElementById('admin-modal-role-badge'),
+  adminTabBtns: document.querySelectorAll('.admin-tab-btn'),
+  adminPanels: document.querySelectorAll('.admin-panel'),
+
+  // Admin Tab: Overview
+  adminStatMembers: document.getElementById('admin-stat-members'),
+  adminStatOnline: document.getElementById('admin-stat-online'),
+  adminStatMessages: document.getElementById('admin-stat-messages'),
+  adminStatChannels: document.getElementById('admin-stat-channels'),
+  adminStatMuted: document.getElementById('admin-stat-muted'),
+  adminStatBanned: document.getElementById('admin-stat-banned'),
+  adminDiagUptime: document.getElementById('admin-diag-uptime'),
+  btnQuickNavBroadcast: document.getElementById('btn-quick-nav-broadcast'),
+  btnQuickNavChannels: document.getElementById('btn-quick-nav-channels'),
+  btnQuickRefreshOverview: document.getElementById('btn-quick-refresh-overview'),
+  btnQuickClearChat: document.getElementById('btn-quick-clear-chat'),
+
+  // Admin Tab: Members
+  adminMemberSearch: document.getElementById('admin-member-search'),
+  adminMemberRoleFilter: document.getElementById('admin-member-role-filter'),
+  btnRefreshMembers: document.getElementById('btn-refresh-members'),
+  adminMembersTbody: document.getElementById('admin-members-tbody'),
+  adminMembersLoading: document.getElementById('admin-members-loading'),
+
+  // Admin Tab: Channels
+  btnToggleCreateChannelForm: document.getElementById('btn-toggle-create-channel-form'),
+  adminCreateChannelBox: document.getElementById('admin-create-channel-box'),
+  newChannelName: document.getElementById('new-channel-name'),
+  newChannelTopic: document.getElementById('new-channel-topic'),
+  btnCancelCreateChannel: document.getElementById('btn-cancel-create-channel'),
+  btnSubmitCreateChannel: document.getElementById('btn-submit-create-channel'),
+  adminChannelsGrid: document.getElementById('admin-channels-grid'),
+
+  // Admin Tab: Messages
+  adminMsgRoomFilter: document.getElementById('admin-msg-room-filter'),
+  adminMsgSearch: document.getElementById('admin-msg-search'),
+  btnRefreshAdminMessages: document.getElementById('btn-refresh-admin-messages'),
+  adminMessagesList: document.getElementById('admin-messages-list'),
+  adminMessagesEmpty: document.getElementById('admin-messages-empty'),
+
+  // Admin Tab: Announcements
+  adminActiveBroadcastStatus: document.getElementById('admin-active-broadcast-status'),
+  adminBroadcastStatusPill: document.getElementById('admin-broadcast-status-pill'),
+  adminActiveBroadcastContent: document.getElementById('admin-active-broadcast-content'),
+  adminActiveBroadcastActions: document.getElementById('admin-active-broadcast-actions'),
+  btnClearActiveBroadcast: document.getElementById('btn-clear-active-broadcast'),
+  inputBroadcastTitle: document.getElementById('input-broadcast-title'),
+  inputBroadcastPriority: document.getElementById('input-broadcast-priority'),
+  inputBroadcastMessage: document.getElementById('input-broadcast-message'),
+  broadcastPreviewBox: document.getElementById('broadcast-preview-box'),
+  previewPriorityIcon: document.getElementById('preview-priority-icon'),
+  previewBroadcastTitle: document.getElementById('preview-broadcast-title'),
+  previewBroadcastMessage: document.getElementById('preview-broadcast-message'),
+  btnPublishBroadcast: document.getElementById('btn-publish-broadcast'),
+
+  // Admin Tab: Audit Log
+  btnRefreshAudit: document.getElementById('btn-refresh-audit'),
+  adminAuditStream: document.getElementById('admin-audit-stream'),
+  adminAuditEmpty: document.getElementById('admin-audit-empty')
 };
 
 // ==================================================================
@@ -733,7 +819,7 @@ function connectSocket(token, userProfile) {
   });
 
   // Profile Sync event from server upon connection/reconnection
-  state.socket.on('user:profile_sync', ({ uid, name, picture }) => {
+  state.socket.on('user:profile_sync', ({ uid, name, picture, role, isMuted, isBanned }) => {
     if (uid === state.currentUser?.uid) {
       if (name) {
         state.currentUser.displayName = name;
@@ -742,6 +828,141 @@ function connectSocket(token, userProfile) {
       if (picture !== undefined) {
         state.currentUser.photoURL = picture || getUiAvatarsUrl(name || state.currentUser.displayName);
         dom.myAvatar.src = state.currentUser.photoURL;
+      }
+      updateUserRoleUI(role, isMuted, isBanned);
+    }
+  });
+
+  // Real-time Role Synchronization event
+  state.socket.on('user:role_sync', ({ uid, role, isMuted, isBanned }) => {
+    if (uid === state.currentUser?.uid) {
+      updateUserRoleUI(role, isMuted, isBanned);
+    }
+  });
+
+  // Campus-wide System Broadcast Announcement
+  state.socket.on('admin:system_broadcast', (broadcast) => {
+    displaySystemBroadcast(broadcast);
+  });
+
+  // User kicked event
+  state.socket.on('user:kicked', ({ reason }) => {
+    appendSystemNotice(`⚠️ You were disconnected by campus staff: ${reason || 'Session ended'}`);
+    setTimeout(() => {
+      handleUserLoggedOut();
+    }, 2000);
+  });
+
+  // Account suspended/banned event
+  state.socket.on('auth:banned', ({ reason }) => {
+    state.isBanned = true;
+    appendSystemNotice(`🚫 Account Suspended: ${reason || 'Your account has been banned by an administrator.'}`);
+    setTimeout(() => {
+      handleUserLoggedOut();
+    }, 2500);
+  });
+
+  // Moderation message send error notice (muted or channel locked)
+  state.socket.on('message:send_error', ({ error }) => {
+    appendSystemNotice(`⚠️ Moderation Notice: ${error}`);
+  });
+
+  // Real-time Channel Administration Events
+  state.socket.on('channel:created', (newChannel) => {
+    if (!state.channels.some(c => c.id === newChannel.id)) {
+      state.channels.push(newChannel);
+      state.unreadCounts[newChannel.id] = 0;
+      renderChannelsList();
+      appendSystemNotice(`📢 New campus channel created: ${newChannel.name}`);
+    }
+    if (!dom.modalAdmin.classList.contains('hidden') && state.adminActiveTab === 'channels') {
+      fetchAdminChannels();
+    }
+  });
+
+  state.socket.on('channel:updated', (updated) => {
+    const idx = state.channels.findIndex(c => c.id === updated.id);
+    if (idx !== -1) {
+      state.channels[idx] = { ...state.channels[idx], ...updated };
+      if (state.currentRoom === updated.id) {
+        dom.currentChannelTitle.textContent = updated.name;
+        dom.currentChannelTopic.textContent = updated.topic;
+        updateChannelLockStatusUI(updated.isLocked);
+      }
+      renderChannelsList();
+    }
+    if (!dom.modalAdmin.classList.contains('hidden') && state.adminActiveTab === 'channels') {
+      fetchAdminChannels();
+    }
+  });
+
+  state.socket.on('channel:locked', ({ channelId, isLocked, topic }) => {
+    const channel = state.channels.find(c => c.id === channelId);
+    if (channel) {
+      channel.isLocked = isLocked;
+      if (state.currentRoom === channelId) {
+        updateChannelLockStatusUI(isLocked);
+      }
+      renderChannelsList();
+    }
+    appendSystemNotice(`🔒 Channel #${channelId} has been ${isLocked ? 'locked in read-only mode' : 'unlocked'} by campus staff.`);
+  });
+
+  state.socket.on('channel:purged', ({ channelId }) => {
+    state.roomCaches[channelId] = [];
+    if (state.currentRoom === channelId) {
+      state.messages = [];
+      renderMessagesList([]);
+      appendSystemNotice(`🧹 Channel history was purged by an administrator.`);
+    }
+  });
+
+  state.socket.on('channel:deleted', ({ channelId }) => {
+    state.channels = state.channels.filter(c => c.id !== channelId);
+    delete state.roomCaches[channelId];
+    delete state.unreadCounts[channelId];
+    renderChannelsList();
+    if (state.currentRoom === channelId) {
+      switchChannel('general');
+      appendSystemNotice(`⚠️ The channel #${channelId} was deleted by staff. You were returned to #general.`);
+    }
+  });
+
+  state.socket.on('message:deleted', ({ roomId, messageId }) => {
+    if (state.roomCaches[roomId]) {
+      state.roomCaches[roomId] = state.roomCaches[roomId].filter(m => m.id !== messageId);
+    }
+    if (state.currentRoom === roomId) {
+      state.messages = state.messages.filter(m => m.id !== messageId);
+      const row = document.getElementById(`msg-row-${messageId}`);
+      if (row) {
+        row.style.transition = 'opacity 0.25s, transform 0.25s';
+        row.style.opacity = '0';
+        row.style.transform = 'scale(0.95)';
+        setTimeout(() => row.remove(), 250);
+      }
+    }
+  });
+
+  state.socket.on('message:pinned', ({ roomId, messageId, isPinned }) => {
+    const updatePin = (list) => {
+      const msg = list?.find(m => m.id === messageId);
+      if (msg) msg.isPinned = isPinned;
+    };
+    updatePin(state.messages);
+    updatePin(state.roomCaches[roomId]);
+    const row = document.getElementById(`msg-row-${messageId}`);
+    if (row) {
+      let pinBadge = row.querySelector('.msg-pin-badge');
+      if (isPinned) {
+        if (!pinBadge) {
+          const badge = document.createElement('span');
+          badge.className = 'msg-pin-badge text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1';
+          badge.innerHTML = '📌 Pinned';
+          row.querySelector('.chat-action-bar')?.parentElement?.querySelector('.meta-header')?.appendChild(badge);
+        }
+      } else if (pinBadge) {
+        pinBadge.remove();
       }
     }
   });
@@ -840,6 +1061,7 @@ function switchChannel(channelId) {
   dom.btnBackToChannels.classList.add('hidden');
   dom.currentChannelTitle.textContent = target.name;
   dom.currentChannelTopic.textContent = target.topic;
+  updateChannelLockStatusUI(target.isLocked);
   dom.messageInput.placeholder = `Message ${target.name}... (*bold*, _italic_, \`code\`)`;
 
   // Instant render from local room cache (0ms latency!)
@@ -936,6 +1158,7 @@ function renderChannelsList() {
           <span class="${isActive ? 'text-indigo-400 font-bold' : unread > 0 ? 'text-indigo-400 font-bold' : 'text-slate-500 group-hover:text-slate-400'}">#</span>
         </span>
         <span class="truncate ${unread > 0 && !isActive ? 'text-white font-semibold' : ''}">${channel.name.replace('#', '')}</span>
+        ${channel.isLocked ? '<span class="text-amber-400 text-[11px] shrink-0" title="Channel locked by staff">🔒</span>' : ''}
       </div>
       ${unread > 0 ? `
         <span id="badge-count-${channel.id}" class="channel-unread-badge ml-2 px-2 py-0.5 rounded-full bg-indigo-600 text-white font-bold text-[10px] leading-tight shrink-0 shadow-sm shadow-indigo-600/40 ring-1 ring-indigo-400/40 animate-badge-pop">
@@ -1109,6 +1332,14 @@ function renderOnlineUsers(users) {
     };
     const dotColor = statusColors[u.status] || 'bg-emerald-500';
 
+    const userRole = u.role || (u.email && u.email.toLowerCase() === 'sianbirmaken.svkm@gmail.com' ? 'admin' : 'student');
+    let roleBadge = '';
+    if (userRole === 'admin') {
+      roleBadge = '<span class="text-[9px] px-1 py-0.2 rounded bg-purple-500/30 text-purple-300 font-mono font-bold shrink-0 border border-purple-500/30">ADMIN</span>';
+    } else if (userRole === 'moderator') {
+      roleBadge = '<span class="text-[9px] px-1 py-0.2 rounded bg-sky-500/30 text-sky-300 font-mono font-bold shrink-0 border border-sky-500/30">MOD</span>';
+    }
+
     item.innerHTML = `
       <div class="flex items-center gap-2.5 min-w-0 flex-1">
         <div class="relative shrink-0">
@@ -1119,6 +1350,8 @@ function renderOnlineUsers(users) {
           <div class="text-xs font-medium text-slate-300 group-hover:text-white truncate flex items-center gap-1.5">
             <span class="truncate">${u.name}</span>
             ${isMe ? '<span class="text-[10px] text-indigo-400 font-mono">(you)</span>' : ''}
+            ${roleBadge}
+            ${u.isMuted ? '<span class="text-[10px]" title="Muted by staff">🔇</span>' : ''}
           </div>
           <div class="text-[10px] text-slate-500 truncate flex items-center gap-1">
             <span>#${u.currentRoom || 'general'}</span>
@@ -1320,13 +1553,25 @@ function appendMessageToChat(message, animate = false) {
   const contentWrapper = document.createElement('div');
   contentWrapper.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[85%]`;
 
-  // Header (name + timestamp + seen receipt)
+  // Header (name + timestamp + seen receipt + staff role + pinned badge)
   const metaHeader = document.createElement('div');
-  metaHeader.className = `flex items-center gap-2 mb-1 px-1 text-xs text-slate-400 ${isMe ? 'flex-row-reverse' : ''}`;
+  metaHeader.className = `meta-header flex items-center gap-2 mb-1 px-1 text-xs text-slate-400 ${isMe ? 'flex-row-reverse' : ''}`;
   
+  const senderRole = message.sender?.role || (message.sender?.email && message.sender.email.toLowerCase() === 'sianbirmaken.svkm@gmail.com' ? 'admin' : 'student');
+  let senderRoleBadge = '';
+  if (senderRole === 'admin') {
+    senderRoleBadge = '<span class="text-[10px] px-1.5 py-0.2 rounded bg-purple-600/30 text-purple-300 border border-purple-500/40 font-mono font-bold shrink-0">ADMIN</span>';
+  } else if (senderRole === 'moderator') {
+    senderRoleBadge = '<span class="text-[10px] px-1.5 py-0.2 rounded bg-sky-600/30 text-sky-300 border border-sky-500/40 font-mono font-bold shrink-0">MOD</span>';
+  } else if (!isMe) {
+    senderRoleBadge = '<span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono">Student</span>';
+  }
+  const pinnedBadgeHtml = message.isPinned ? '<span class="msg-pin-badge text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1">📌 Pinned</span>' : '';
+
   metaHeader.innerHTML = `
     <span data-author-name-uid="${message.sender?.uid || ''}" class="font-semibold text-slate-200">${isMe ? 'You' : (message.sender?.name || 'Student')}</span>
-    ${!isMe ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono">Student</span>' : ''}
+    ${senderRoleBadge}
+    ${pinnedBadgeHtml}
     <span class="text-[11px] text-slate-500">${message.formattedTime || ''}</span>
     ${isMe ? `<span id="seen-indicator-${message.id}">${buildSeenStatusHtml(message.seenBy, true, message.isPending)}</span>` : ''}
   `;
@@ -1410,6 +1655,35 @@ function buildMessageActionBar(message) {
     });
     bar.appendChild(btn);
   });
+
+  // Staff Moderation Actions directly in chat feed
+  if (state.userRole === 'admin' || state.userRole === 'moderator') {
+    const sep = document.createElement('div');
+    sep.className = 'w-px h-3.5 bg-slate-700 mx-0.5';
+    bar.appendChild(sep);
+
+    const btnPin = document.createElement('button');
+    btnPin.type = 'button';
+    btnPin.className = 'w-6 h-6 flex items-center justify-center rounded hover:bg-slate-800 active:scale-95 transition text-xs cursor-pointer text-amber-400';
+    btnPin.textContent = message.isPinned ? '📌' : '📍';
+    btnPin.title = message.isPinned ? 'Unpin message' : 'Pin message';
+    btnPin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      adminTogglePinMessage(message.id, !message.isPinned);
+    });
+    bar.appendChild(btnPin);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'w-6 h-6 flex items-center justify-center rounded hover:bg-red-950/80 hover:text-red-300 active:scale-95 transition text-xs cursor-pointer text-slate-400';
+    btnDelete.textContent = '🗑️';
+    btnDelete.title = 'Delete message (Moderation)';
+    btnDelete.addEventListener('click', (e) => {
+      e.stopPropagation();
+      adminDeleteMessage(message.id);
+    });
+    bar.appendChild(btnDelete);
+  }
 
   return bar;
 }
@@ -2044,6 +2318,23 @@ function sendMessage() {
 
   if ((!content && !image) || !state.socket || !state.currentUser) return;
 
+  // Moderation checks
+  if (state.isBanned) {
+    appendSystemNotice('🚫 Your account is suspended by an administrator.');
+    return;
+  }
+  if (state.isMuted) {
+    appendSystemNotice('🔇 You are currently muted by campus staff and cannot send messages.');
+    return;
+  }
+  if (!state.isDirectMessage) {
+    const currentCh = state.channels.find(c => c.id === state.currentRoom);
+    if (currentCh?.isLocked && state.userRole === 'student') {
+      appendSystemNotice('🔒 This channel is locked in read-only mode by staff.');
+      return;
+    }
+  }
+
   const clientTempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const now = Date.now();
 
@@ -2527,6 +2818,7 @@ function setupEventListeners() {
   if (dom.btnQuickThemeToggle) {
     dom.btnQuickThemeToggle.addEventListener('click', openModal);
   }
+
   dom.btnCloseModal.addEventListener('click', closeModal);
   dom.btnModalDismiss.addEventListener('click', closeModal);
 
@@ -2686,8 +2978,1142 @@ function setupEventListeners() {
       if (dom.modalProfile && !dom.modalProfile.classList.contains('hidden')) {
         closeProfileModal();
       }
+      if (dom.modalAdmin && !dom.modalAdmin.classList.contains('hidden')) {
+        closeAdminPanel();
+      }
     }
   });
+
+  // Initialize Campus Admin Console Event Listeners
+  initAdminConsoleListeners();
+}
+
+// ==================================================================
+// 14. CAMPUS ADMINISTRATION & MODERATION CONSOLE LOGIC
+// ==================================================================
+
+// Super-Admin Email Constant
+const PRIMARY_CAMPUS_OWNER_EMAIL = 'sianbirmaken.svkm@gmail.com';
+
+// Secure helper to fetch active auth token
+async function getAuthToken() {
+  if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
+    try {
+      const token = await firebase.auth().currentUser.getIdToken(false);
+      state.authToken = token;
+      return token;
+    } catch (e) {
+      console.warn('Could not refresh ID token:', e);
+    }
+  }
+  return state.authToken || '';
+}
+
+// Admin API Fetch Wrapper with Token & Client Identity Authentication
+async function callAdminApi(endpoint, options = {}) {
+  const token = await getAuthToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+    ...(options.headers || {})
+  };
+
+  const clientUser = {
+    uid: state.currentUser?.uid,
+    name: state.currentUser?.displayName,
+    email: state.currentUser?.email
+  };
+
+  let body = undefined;
+  if (options.body) {
+    body = JSON.stringify({
+      ...options.body,
+      clientUser
+    });
+  } else if (options.method && options.method.toUpperCase() !== 'GET') {
+    body = JSON.stringify({ clientUser });
+  }
+
+  const res = await fetch(endpoint, {
+    method: options.method || 'GET',
+    headers,
+    body
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}: ${res.statusText}`);
+  }
+  return data;
+}
+
+// Synchronize User Role UI
+function updateUserRoleUI(role, isMuted, isBanned) {
+  const isOwner = state.currentUser?.email && state.currentUser.email.toLowerCase() === PRIMARY_CAMPUS_OWNER_EMAIL.toLowerCase();
+  const effectiveRole = isOwner ? 'admin' : (role || 'student');
+
+  state.userRole = effectiveRole;
+  state.isMuted = Boolean(isMuted);
+  state.isBanned = Boolean(isBanned);
+
+  const isStaff = effectiveRole === 'admin' || effectiveRole === 'moderator';
+
+  // Toggle Admin Console Button in Header
+  if (dom.btnOpenAdminPanel) {
+    if (isStaff) {
+      dom.btnOpenAdminPanel.classList.remove('hidden');
+      dom.btnOpenAdminPanel.classList.add('flex');
+    } else {
+      dom.btnOpenAdminPanel.classList.add('hidden');
+      dom.btnOpenAdminPanel.classList.remove('flex');
+    }
+  }
+
+  // Update Role Badge next to User Profile
+  if (dom.myRoleBadge) {
+    if (effectiveRole === 'admin') {
+      dom.myRoleBadge.textContent = 'ADMIN';
+      dom.myRoleBadge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-600/30 text-purple-300 border border-purple-500/50 shadow-sm';
+      dom.myRoleBadge.classList.remove('hidden');
+    } else if (effectiveRole === 'moderator') {
+      dom.myRoleBadge.textContent = 'MOD';
+      dom.myRoleBadge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-600/30 text-sky-300 border border-sky-500/50 shadow-sm';
+      dom.myRoleBadge.classList.remove('hidden');
+    } else {
+      dom.myRoleBadge.classList.add('hidden');
+    }
+  }
+
+  // Update Role Badge inside Admin Modal Header
+  if (dom.adminModalRoleBadge) {
+    if (effectiveRole === 'admin') {
+      dom.adminModalRoleBadge.textContent = 'Campus Administrator';
+      dom.adminModalRoleBadge.className = 'px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-600/20 text-purple-300 border border-purple-500/30';
+    } else if (effectiveRole === 'moderator') {
+      dom.adminModalRoleBadge.textContent = 'Campus Moderator';
+      dom.adminModalRoleBadge.className = 'px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-600/20 text-sky-300 border border-sky-500/30';
+    }
+  }
+
+  // Refresh Channel Lock Status for Message Input
+  const currentCh = state.channels.find(c => c.id === state.currentRoom);
+  if (currentCh) {
+    updateChannelLockStatusUI(currentCh.isLocked);
+  }
+}
+
+// Synchronize Channel Lock Status UI & Message Input
+function updateChannelLockStatusUI(isLocked) {
+  if (dom.channelLockedBadge) {
+    if (isLocked) {
+      dom.channelLockedBadge.classList.remove('hidden');
+    } else {
+      dom.channelLockedBadge.classList.add('hidden');
+    }
+  }
+
+  const isStaff = state.userRole === 'admin' || state.userRole === 'moderator';
+
+  if (state.isMuted) {
+    dom.messageInput.placeholder = '🔇 You are currently muted by campus staff';
+    dom.messageInput.disabled = true;
+  } else if (isLocked && !isStaff) {
+    dom.messageInput.placeholder = '🔒 This channel is locked in read-only mode by staff';
+    dom.messageInput.disabled = true;
+  } else {
+    dom.messageInput.disabled = false;
+    const currentCh = state.channels.find(c => c.id === state.currentRoom);
+    if (currentCh) {
+      dom.messageInput.placeholder = `Message ${currentCh.name}... (*bold*, _italic_, \`code\`)`;
+    }
+  }
+}
+
+// Display Campus-wide System Broadcast Banner
+function displaySystemBroadcast(broadcast) {
+  state.activeSystemBroadcast = broadcast;
+
+  if (broadcast && broadcast.message && broadcast.message.trim()) {
+    if (dom.broadcastTitle) dom.broadcastTitle.textContent = broadcast.title || 'Campus Notice';
+    if (dom.broadcastMessage) dom.broadcastMessage.textContent = broadcast.message;
+
+    // Set Priority Icon & Styling
+    if (dom.broadcastPriorityIcon) {
+      if (broadcast.priority === 'critical') {
+        dom.broadcastPriorityIcon.textContent = '🚨';
+        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-red-900/90 via-rose-900/80 to-slate-900 border-b border-red-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-red-950/40 relative z-20';
+      } else if (broadcast.priority === 'urgent') {
+        dom.broadcastPriorityIcon.textContent = '⚡';
+        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-amber-900/90 via-orange-900/80 to-slate-900 border-b border-amber-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-amber-950/40 relative z-20';
+      } else {
+        dom.broadcastPriorityIcon.textContent = '📢';
+        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-indigo-900/90 via-purple-900/80 to-slate-900 border-b border-indigo-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-indigo-950/40 relative z-20';
+      }
+    }
+
+    if (dom.systemBroadcastBanner) {
+      dom.systemBroadcastBanner.classList.remove('hidden');
+      dom.systemBroadcastBanner.classList.add('flex');
+    }
+  } else {
+    if (dom.systemBroadcastBanner) {
+      dom.systemBroadcastBanner.classList.add('hidden');
+      dom.systemBroadcastBanner.classList.remove('flex');
+    }
+  }
+
+  // Update Announcements Tab in Admin Modal if open
+  updateAdminBroadcastTabUI(broadcast);
+}
+
+// Open Admin Modal
+function openAdminPanel(targetTab = 'overview') {
+  if (state.userRole !== 'admin' && state.userRole !== 'moderator') {
+    appendSystemNotice('⚠️ Access Denied: Campus administration console requires staff privileges.');
+    return;
+  }
+
+  if (dom.modalAdmin) {
+    dom.modalAdmin.classList.remove('hidden');
+  }
+
+  switchAdminTab(targetTab);
+}
+
+// Close Admin Modal
+function closeAdminPanel() {
+  if (dom.modalAdmin) {
+    dom.modalAdmin.classList.add('hidden');
+  }
+}
+
+// Switch between Admin Console Tabs
+function switchAdminTab(tabName) {
+  state.adminActiveTab = tabName;
+
+  // Update Tab Button styles
+  if (dom.adminTabBtns) {
+    dom.adminTabBtns.forEach(btn => {
+      const btnTab = btn.getAttribute('data-admin-tab');
+      if (btnTab === tabName) {
+        btn.className = 'admin-tab-btn px-4 py-2 text-xs font-semibold text-indigo-400 bg-slate-800/90 border-b-2 border-indigo-500 rounded-t-lg transition flex items-center gap-1.5';
+      } else {
+        btn.className = 'admin-tab-btn px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-b-2 border-transparent transition flex items-center gap-1.5';
+      }
+    });
+  }
+
+  // Toggle Panel Visibility
+  if (dom.adminPanels) {
+    dom.adminPanels.forEach(panel => {
+      if (panel.id === `admin-panel-${tabName}`) {
+        panel.classList.remove('hidden');
+      } else {
+        panel.classList.add('hidden');
+      }
+    });
+  }
+
+  // Load Data for Tab
+  switch (tabName) {
+    case 'overview':
+      fetchAdminStats();
+      break;
+    case 'members':
+      fetchAdminMembers();
+      break;
+    case 'channels':
+      fetchAdminChannels();
+      break;
+    case 'messages':
+      populateAdminRoomFilter();
+      fetchAdminMessages();
+      break;
+    case 'broadcast':
+      fetchAdminBroadcast();
+      break;
+    case 'audit':
+      fetchAdminAuditLogs();
+      break;
+  }
+}
+
+// ==========================================
+// TAB 1: OVERVIEW & TELEMETRY
+// ==========================================
+async function fetchAdminStats() {
+  try {
+    const data = await callAdminApi('/api/admin/stats');
+    const { stats } = data;
+    state.adminData.stats = stats;
+
+    if (dom.adminStatMembers) dom.adminStatMembers.textContent = stats.totalMembers ?? '—';
+    if (dom.adminStatOnline) dom.adminStatOnline.textContent = stats.onlineMembers ?? '—';
+    if (dom.adminStatMessages) dom.adminStatMessages.textContent = stats.totalMessages ?? '—';
+    if (dom.adminStatChannels) dom.adminStatChannels.textContent = stats.totalChannels ?? '—';
+    if (dom.adminStatMuted) dom.adminStatMuted.textContent = stats.mutedCount ?? '0';
+    if (dom.adminStatBanned) dom.adminStatBanned.textContent = stats.bannedCount ?? '0';
+
+    if (dom.adminDiagUptime) {
+      const upSec = Math.floor(stats.systemUptime || 0);
+      const hours = Math.floor(upSec / 3600);
+      const mins = Math.floor((upSec % 3600) / 60);
+      dom.adminDiagUptime.textContent = `${hours}h ${mins}m`;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch admin stats:', err);
+  }
+}
+
+// ==========================================
+// TAB 2: MEMBERS & MODERATION
+// ==========================================
+async function fetchAdminMembers() {
+  if (dom.adminMembersLoading) dom.adminMembersLoading.classList.remove('hidden');
+  try {
+    const data = await callAdminApi('/api/admin/members');
+    state.adminData.members = data.members || [];
+    renderAdminMembersTable();
+  } catch (err) {
+    console.error('Failed to fetch admin members:', err);
+    if (dom.adminMembersTbody) {
+      dom.adminMembersTbody.innerHTML = `<tr><td colspan="5" class="px-4 py-4 text-center text-xs text-red-400">Failed to load member directory: ${err.message}</td></tr>`;
+    }
+  } finally {
+    if (dom.adminMembersLoading) dom.adminMembersLoading.classList.add('hidden');
+  }
+}
+
+function renderAdminMembersTable() {
+  if (!dom.adminMembersTbody) return;
+
+  const searchQ = (dom.adminMemberSearch ? dom.adminMemberSearch.value.trim().toLowerCase() : '');
+  const roleFilter = dom.adminMemberRoleFilter ? dom.adminMemberRoleFilter.value : 'all';
+
+  let filtered = state.adminData.members;
+
+  if (searchQ) {
+    filtered = filtered.filter(m => 
+      (m.name && m.name.toLowerCase().includes(searchQ)) ||
+      (m.email && m.email.toLowerCase().includes(searchQ)) ||
+      (m.uid && m.uid.toLowerCase().includes(searchQ))
+    );
+  }
+
+  if (roleFilter !== 'all') {
+    filtered = filtered.filter(m => m.role === roleFilter);
+  }
+
+  if (filtered.length === 0) {
+    dom.adminMembersTbody.innerHTML = `
+      <tr>
+        <td colspan="5" class="px-4 py-8 text-center text-xs text-slate-500">
+          No campus members found matching current filter.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  dom.adminMembersTbody.innerHTML = '';
+  const myUid = state.currentUser?.uid;
+  const isMeSuperAdmin = state.currentUser?.email?.toLowerCase() === PRIMARY_CAMPUS_OWNER_EMAIL.toLowerCase();
+
+  filtered.forEach(member => {
+    const isMe = member.uid === myUid;
+    const isPrimaryOwner = member.email && member.email.toLowerCase() === PRIMARY_CAMPUS_OWNER_EMAIL.toLowerCase();
+    const canModerate = !isMe && !isPrimaryOwner && (state.userRole === 'admin' || (!isMeSuperAdmin && member.role === 'student'));
+
+    const row = document.createElement('tr');
+    row.className = 'border-b border-slate-800/80 hover:bg-slate-800/30 transition text-xs text-slate-300';
+
+    const statusDot = member.status === 'online' ? 'bg-emerald-500' : member.status === 'studying' ? 'bg-indigo-400' : 'bg-slate-600';
+
+    row.innerHTML = `
+      <td class="px-4 py-3">
+        <div class="flex items-center gap-2.5">
+          <div class="relative shrink-0">
+            <img src="${member.picture || getUiAvatarsUrl(member.name || 'Student')}" class="w-8 h-8 rounded-full object-cover border border-slate-700" alt="${member.name}" />
+            <span class="absolute bottom-0 right-0 w-2 h-2 rounded-full ${statusDot} ring-1 ring-slate-900"></span>
+          </div>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-200 flex items-center gap-1.5">
+              <span class="truncate">${member.name || 'Student'}</span>
+              ${isMe ? '<span class="text-[10px] text-indigo-400 font-mono font-bold">(You)</span>' : ''}
+              ${isPrimaryOwner ? '<span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-mono font-bold border border-amber-500/30">OWNER</span>' : ''}
+            </div>
+            <div class="text-[11px] text-slate-500 truncate">${member.email || 'No email'}</div>
+          </div>
+        </div>
+      </td>
+      <td class="px-4 py-3">
+        <select class="admin-role-select bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 font-mono focus:border-indigo-500 focus:outline-none" data-member-uid="${member.uid}" ${(!canModerate || state.userRole !== 'admin') ? 'disabled' : ''}>
+          <option value="student" ${member.role === 'student' ? 'selected' : ''}>Student</option>
+          <option value="moderator" ${member.role === 'moderator' ? 'selected' : ''}>Moderator</option>
+          <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Administrator</option>
+        </select>
+      </td>
+      <td class="px-4 py-3">
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full ${statusDot}"></span>
+          <span class="capitalize text-slate-300">${member.status || 'offline'}</span>
+          <span class="text-slate-500 font-mono text-[10px] ml-1">#${member.currentRoom || 'general'}</span>
+        </div>
+      </td>
+      <td class="px-4 py-3">
+        <div class="flex items-center gap-1">
+          ${member.isBanned ? '<span class="px-2 py-0.5 rounded bg-red-950/80 text-red-300 border border-red-500/40 font-mono text-[10px] font-bold">BANNED</span>' : member.isMuted ? '<span class="px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-500/40 font-mono text-[10px] font-bold">MUTED</span>' : '<span class="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-mono text-[10px]">ACTIVE</span>'}
+        </div>
+      </td>
+      <td class="px-4 py-3 text-right">
+        <div class="flex items-center justify-end gap-1">
+          ${canModerate ? `
+            <button type="button" class="btn-mod-mute px-2 py-1 rounded-lg text-[11px] font-medium transition ${member.isMuted ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/40 border border-amber-500/40' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}" data-member-uid="${member.uid}" data-muted="${member.isMuted ? 'true' : 'false'}">
+              ${member.isMuted ? 'Unmute' : 'Mute'}
+            </button>
+            <button type="button" class="btn-mod-kick px-2 py-1 rounded-lg text-[11px] font-medium bg-slate-800 text-slate-300 hover:bg-amber-950/50 hover:text-amber-300 transition" data-member-uid="${member.uid}" data-member-name="${member.name || 'User'}">
+              Kick
+            </button>
+            ${state.userRole === 'admin' ? `
+              <button type="button" class="btn-mod-ban px-2 py-1 rounded-lg text-[11px] font-medium transition ${member.isBanned ? 'bg-emerald-600/30 text-emerald-300 hover:bg-emerald-600/40 border border-emerald-500/40' : 'bg-red-950/60 text-red-300 hover:bg-red-900/60 border border-red-800/40'}" data-member-uid="${member.uid}" data-banned="${member.isBanned ? 'true' : 'false'}" data-member-name="${member.name || 'User'}">
+                ${member.isBanned ? 'Unban' : 'Ban'}
+              </button>
+            ` : ''}
+          ` : `
+            <span class="text-[11px] text-slate-600 italic">Protected</span>
+          `}
+        </div>
+      </td>
+    `;
+
+    dom.adminMembersTbody.appendChild(row);
+  });
+
+  // Attach Action Listeners to table elements
+  dom.adminMembersTbody.querySelectorAll('.admin-role-select').forEach(sel => {
+    sel.addEventListener('change', async (e) => {
+      const uid = e.target.getAttribute('data-member-uid');
+      const newRole = e.target.value;
+      try {
+        await callAdminApi('/api/admin/members/role', {
+          method: 'POST',
+          body: { targetUid: uid, role: newRole }
+        });
+        fetchAdminMembers();
+        fetchAdminStats();
+      } catch (err) {
+        alert(`Failed to update member role: ${err.message}`);
+        fetchAdminMembers();
+      }
+    });
+  });
+
+  dom.adminMembersTbody.querySelectorAll('.btn-mod-mute').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.getAttribute('data-member-uid');
+      const isCurrentlyMuted = btn.getAttribute('data-muted') === 'true';
+      try {
+        await callAdminApi('/api/admin/members/mute', {
+          method: 'POST',
+          body: { targetUid: uid, muted: !isCurrentlyMuted }
+        });
+        fetchAdminMembers();
+        fetchAdminStats();
+      } catch (err) {
+        alert(`Failed to toggle mute: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminMembersTbody.querySelectorAll('.btn-mod-kick').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.getAttribute('data-member-uid');
+      const name = btn.getAttribute('data-member-name');
+      if (!confirm(`Are you sure you want to disconnect ${name} from current campus sessions?`)) return;
+      try {
+        await callAdminApi('/api/admin/members/kick', {
+          method: 'POST',
+          body: { targetUid: uid, reason: 'Disconnected by campus staff' }
+        });
+        fetchAdminMembers();
+        fetchAdminStats();
+      } catch (err) {
+        alert(`Failed to kick member: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminMembersTbody.querySelectorAll('.btn-mod-ban').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.getAttribute('data-member-uid');
+      const isCurrentlyBanned = btn.getAttribute('data-banned') === 'true';
+      const name = btn.getAttribute('data-member-name');
+
+      if (!isCurrentlyBanned) {
+        const reason = prompt(`Reason for suspending account ${name}:`, 'Violation of campus community guidelines');
+        if (reason === null) return;
+        try {
+          await callAdminApi('/api/admin/members/ban', {
+            method: 'POST',
+            body: { targetUid: uid, banned: true, reason }
+          });
+          fetchAdminMembers();
+          fetchAdminStats();
+        } catch (err) {
+          alert(`Failed to ban account: ${err.message}`);
+        }
+      } else {
+        if (!confirm(`Lift suspension for ${name}?`)) return;
+        try {
+          await callAdminApi('/api/admin/members/ban', {
+            method: 'POST',
+            body: { targetUid: uid, banned: false }
+          });
+          fetchAdminMembers();
+          fetchAdminStats();
+        } catch (err) {
+          alert(`Failed to lift ban: ${err.message}`);
+        }
+      }
+    });
+  });
+}
+
+// ==========================================
+// TAB 3: CHANNELS MANAGEMENT
+// ==========================================
+async function fetchAdminChannels() {
+  try {
+    const data = await callAdminApi('/api/admin/channels');
+    state.adminData.channels = data.channels || [];
+    renderAdminChannelsGrid();
+  } catch (err) {
+    console.error('Failed to load admin channels:', err);
+  }
+}
+
+function renderAdminChannelsGrid() {
+  if (!dom.adminChannelsGrid) return;
+  dom.adminChannelsGrid.innerHTML = '';
+
+  const channels = state.adminData.channels;
+  if (channels.length === 0) {
+    dom.adminChannelsGrid.innerHTML = `<div class="col-span-full py-8 text-center text-xs text-slate-500">No channels found.</div>`;
+    return;
+  }
+
+  channels.forEach(ch => {
+    const card = document.createElement('div');
+    card.className = 'p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex flex-col justify-between transition hover:border-slate-700';
+
+    card.innerHTML = `
+      <div>
+        <div class="flex items-center justify-between gap-2 mb-1.5">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-indigo-400 font-bold text-sm">#</span>
+            <span class="font-semibold text-slate-200 text-sm truncate">${ch.name.replace('#', '')}</span>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${ch.isLocked ? `
+              <span class="px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-500/40 font-mono text-[10px] font-bold flex items-center gap-1">
+                🔒 LOCKED
+              </span>
+            ` : `
+              <span class="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 font-mono text-[10px]">
+                OPEN
+              </span>
+            `}
+          </div>
+        </div>
+        <p class="text-xs text-slate-400 line-clamp-2 mb-3">${ch.topic || 'No topic set'}</p>
+        <div class="flex items-center gap-4 text-[11px] text-slate-500 mb-4">
+          <span class="flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            ${ch.onlineCount || 0} online
+          </span>
+          <span class="flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            ${ch.totalMessages || 0} messages
+          </span>
+        </div>
+      </div>
+
+      <div class="pt-3 border-t border-slate-800 flex items-center justify-between gap-1">
+        <div class="flex items-center gap-1">
+          <button type="button" class="btn-channel-lock px-2.5 py-1 rounded-lg text-xs font-medium transition ${ch.isLocked ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/40 border border-amber-500/40' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}" data-channel-id="${ch.id}" data-locked="${ch.isLocked ? 'true' : 'false'}">
+            ${ch.isLocked ? 'Unlock' : 'Lock (Read-Only)'}
+          </button>
+          <button type="button" class="btn-channel-topic px-2 py-1 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition" data-channel-id="${ch.id}" data-channel-topic="${encodeURIComponent(ch.topic || '')}" title="Edit Topic">
+            Topic
+          </button>
+        </div>
+        <div class="flex items-center gap-1">
+          <button type="button" class="btn-channel-purge px-2 py-1 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:bg-red-950/60 hover:text-red-400 transition" data-channel-id="${ch.id}" title="Purge messages in this channel">
+            Purge
+          </button>
+          ${(state.userRole === 'admin' && ch.id !== 'general' && ch.id !== 'study-groups') ? `
+            <button type="button" class="btn-channel-delete px-2 py-1 rounded-lg text-xs font-medium text-slate-500 hover:bg-red-950/80 hover:text-red-300 transition" data-channel-id="${ch.id}" title="Delete channel">
+              ✕
+            </button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+
+    dom.adminChannelsGrid.appendChild(card);
+  });
+
+  // Attach Action Listeners
+  dom.adminChannelsGrid.querySelectorAll('.btn-channel-lock').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chId = btn.getAttribute('data-channel-id');
+      const isLocked = btn.getAttribute('data-locked') === 'true';
+      try {
+        await callAdminApi('/api/admin/channels/lock', {
+          method: 'POST',
+          body: { channelId: chId, locked: !isLocked }
+        });
+        fetchAdminChannels();
+      } catch (err) {
+        alert(`Failed to toggle channel lock: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminChannelsGrid.querySelectorAll('.btn-channel-topic').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chId = btn.getAttribute('data-channel-id');
+      const curTopic = decodeURIComponent(btn.getAttribute('data-channel-topic') || '');
+      const newTopic = prompt(`Edit topic for #${chId}:`, curTopic);
+      if (newTopic === null || newTopic === curTopic) return;
+      try {
+        await callAdminApi('/api/admin/channels/edit', {
+          method: 'POST',
+          body: { channelId: chId, topic: newTopic }
+        });
+        fetchAdminChannels();
+      } catch (err) {
+        alert(`Failed to edit channel topic: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminChannelsGrid.querySelectorAll('.btn-channel-purge').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chId = btn.getAttribute('data-channel-id');
+      if (!confirm(`Are you sure you want to PURGE ALL MESSAGES in #${chId}? This action cannot be undone.`)) return;
+      try {
+        await callAdminApi('/api/admin/channels/purge', {
+          method: 'POST',
+          body: { channelId: chId }
+        });
+        alert(`Channel #${chId} history purged.`);
+        fetchAdminChannels();
+      } catch (err) {
+        alert(`Failed to purge channel: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminChannelsGrid.querySelectorAll('.btn-channel-delete').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chId = btn.getAttribute('data-channel-id');
+      if (!confirm(`Are you sure you want to permanently DELETE channel #${chId}?`)) return;
+      try {
+        await callAdminApi('/api/admin/channels/delete', {
+          method: 'POST',
+          body: { channelId: chId }
+        });
+        fetchAdminChannels();
+      } catch (err) {
+        alert(`Failed to delete channel: ${err.message}`);
+      }
+    });
+  });
+}
+
+// Channel Creation Form Handlers
+function toggleCreateChannelForm(show) {
+  if (!dom.adminCreateChannelBox) return;
+  if (show) {
+    dom.adminCreateChannelBox.classList.remove('hidden');
+    if (dom.newChannelName) dom.newChannelName.focus();
+  } else {
+    dom.adminCreateChannelBox.classList.add('hidden');
+    if (dom.newChannelName) dom.newChannelName.value = '';
+    if (dom.newChannelTopic) dom.newChannelTopic.value = '';
+  }
+}
+
+async function handleCreateChannelSubmit() {
+  const rawName = dom.newChannelName ? dom.newChannelName.value.trim() : '';
+  const topic = dom.newChannelTopic ? dom.newChannelTopic.value.trim() : '';
+
+  if (!rawName) {
+    alert('Please enter a valid channel name (e.g. robotics, clubs).');
+    return;
+  }
+
+  try {
+    await callAdminApi('/api/admin/channels/create', {
+      method: 'POST',
+      body: { name: rawName, topic }
+    });
+    toggleCreateChannelForm(false);
+    fetchAdminChannels();
+  } catch (err) {
+    alert(`Failed to create channel: ${err.message}`);
+  }
+}
+
+// ==========================================
+// TAB 4: MESSAGE MODERATION & PURGE
+// ==========================================
+function populateAdminRoomFilter() {
+  if (!dom.adminMsgRoomFilter) return;
+  const currentVal = dom.adminMsgRoomFilter.value;
+  dom.adminMsgRoomFilter.innerHTML = `<option value="">All School Channels</option>`;
+
+  state.channels.forEach(ch => {
+    const opt = document.createElement('option');
+    opt.value = ch.id;
+    opt.textContent = ch.name;
+    dom.adminMsgRoomFilter.appendChild(opt);
+  });
+
+  if (currentVal) dom.adminMsgRoomFilter.value = currentVal;
+}
+
+async function fetchAdminMessages() {
+  const roomId = dom.adminMsgRoomFilter ? dom.adminMsgRoomFilter.value : '';
+  const q = dom.adminMsgSearch ? dom.adminMsgSearch.value.trim() : '';
+
+  const params = new URLSearchParams();
+  if (roomId) params.set('roomId', roomId);
+  if (q) params.set('q', q);
+
+  try {
+    const data = await callAdminApi(`/api/admin/messages?${params.toString()}`);
+    state.adminData.messages = data.messages || [];
+    renderAdminMessagesList();
+  } catch (err) {
+    console.error('Failed to load admin messages:', err);
+  }
+}
+
+function renderAdminMessagesList() {
+  if (!dom.adminMessagesList) return;
+  dom.adminMessagesList.innerHTML = '';
+
+  const msgs = state.adminData.messages;
+  if (msgs.length === 0) {
+    if (dom.adminMessagesEmpty) dom.adminMessagesEmpty.classList.remove('hidden');
+    return;
+  }
+  if (dom.adminMessagesEmpty) dom.adminMessagesEmpty.classList.add('hidden');
+
+  msgs.forEach(msg => {
+    const card = document.createElement('div');
+    card.id = `admin-msg-card-${msg.id}`;
+    card.className = 'p-3 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex items-start justify-between gap-3 hover:border-slate-700 transition';
+
+    card.innerHTML = `
+      <div class="flex items-start gap-3 min-w-0 flex-1">
+        <img src="${msg.sender?.avatar || getUiAvatarsUrl(msg.sender?.name || 'Student')}" class="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-800 mt-0.5" alt="" />
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 mb-1 flex-wrap">
+            <span class="font-semibold text-slate-200 text-xs">${msg.sender?.name || 'Student'}</span>
+            <span class="text-[10px] text-slate-500 font-mono">${msg.sender?.email || ''}</span>
+            <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-500/30 font-mono font-semibold">#${msg.roomId}</span>
+            <span class="text-[10px] text-slate-500">${msg.formattedTime || ''}</span>
+            ${msg.isPinned ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">📌 Pinned</span>' : ''}
+          </div>
+          ${msg.content ? `<p class="text-xs text-slate-300 break-words leading-relaxed">${escapeHtml(msg.content)}</p>` : ''}
+          ${msg.image ? `
+            <div class="mt-2 max-w-xs rounded-lg overflow-hidden border border-slate-800">
+              <img src="${msg.image}" class="max-h-36 w-auto object-cover" alt="Attached photo" />
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button type="button" class="btn-admin-msg-pin p-1.5 rounded-lg text-xs transition ${msg.isPinned ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:text-amber-400'}" data-msg-id="${msg.id}" data-room-id="${msg.roomId}" data-pinned="${msg.isPinned ? 'true' : 'false'}" title="${msg.isPinned ? 'Unpin message' : 'Pin message'}">
+          📌
+        </button>
+        <button type="button" class="btn-admin-msg-delete p-1.5 rounded-lg text-xs bg-slate-800 text-slate-400 hover:bg-red-950/80 hover:text-red-300 transition" data-msg-id="${msg.id}" data-room-id="${msg.roomId}" title="Delete Message">
+          🗑️
+        </button>
+      </div>
+    `;
+
+    dom.adminMessagesList.appendChild(card);
+  });
+
+  // Attach Action Listeners
+  dom.adminMessagesList.querySelectorAll('.btn-admin-msg-pin').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const msgId = btn.getAttribute('data-msg-id');
+      const roomId = btn.getAttribute('data-room-id');
+      const isPinned = btn.getAttribute('data-pinned') === 'true';
+      try {
+        await callAdminApi('/api/admin/messages/pin', {
+          method: 'POST',
+          body: { roomId, messageId: msgId, pinned: !isPinned }
+        });
+        fetchAdminMessages();
+      } catch (err) {
+        alert(`Failed to pin/unpin message: ${err.message}`);
+      }
+    });
+  });
+
+  dom.adminMessagesList.querySelectorAll('.btn-admin-msg-delete').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const msgId = btn.getAttribute('data-msg-id');
+      const roomId = btn.getAttribute('data-room-id');
+      if (!confirm('Are you sure you want to delete this message?')) return;
+      try {
+        await callAdminApi('/api/admin/messages/delete', {
+          method: 'POST',
+          body: { roomId, messageId: msgId }
+        });
+        fetchAdminMessages();
+      } catch (err) {
+        alert(`Failed to delete message: ${err.message}`);
+      }
+    });
+  });
+}
+
+// In-feed Moderation Shortcuts
+async function adminTogglePinMessage(messageId, pinned) {
+  try {
+    await callAdminApi('/api/admin/messages/pin', {
+      method: 'POST',
+      body: { roomId: state.currentRoom, messageId, pinned }
+    });
+  } catch (err) {
+    alert(`Failed to toggle pin: ${err.message}`);
+  }
+}
+
+async function adminDeleteMessage(messageId) {
+  if (!confirm('Delete this message from chat?')) return;
+  try {
+    await callAdminApi('/api/admin/messages/delete', {
+      method: 'POST',
+      body: { roomId: state.currentRoom, messageId }
+    });
+  } catch (err) {
+    alert(`Failed to delete message: ${err.message}`);
+  }
+}
+
+// Simple HTML escaping helper for safe text preview
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/[&<>'"]/g, 
+    tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+  );
+}
+
+// ==========================================
+// TAB 5: CAMPUS BROADCAST ANNOUNCEMENTS
+// ==========================================
+async function fetchAdminBroadcast() {
+  try {
+    const data = await callAdminApi('/api/admin/broadcast');
+    updateAdminBroadcastTabUI(data.broadcast);
+  } catch (err) {
+    console.error('Failed to load admin broadcast:', err);
+  }
+}
+
+function updateAdminBroadcastTabUI(broadcast) {
+  if (!dom.adminActiveBroadcastStatus) return;
+
+  if (broadcast && broadcast.message) {
+    if (dom.adminBroadcastStatusPill) {
+      dom.adminBroadcastStatusPill.textContent = 'ACTIVE';
+      dom.adminBroadcastStatusPill.className = 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40 animate-pulse';
+    }
+    if (dom.adminActiveBroadcastContent) {
+      dom.adminActiveBroadcastContent.innerHTML = `
+        <div class="font-semibold text-slate-200 text-sm mb-0.5">${escapeHtml(broadcast.title || 'Campus Broadcast')}</div>
+        <p class="text-xs text-slate-300 mb-2">${escapeHtml(broadcast.message)}</p>
+        <div class="flex items-center gap-3 text-[10px] text-slate-500 font-mono">
+          <span>Priority: <strong class="uppercase ${broadcast.priority === 'critical' ? 'text-red-400' : broadcast.priority === 'urgent' ? 'text-amber-400' : 'text-indigo-400'}">${broadcast.priority || 'normal'}</strong></span>
+          <span>By: ${escapeHtml(broadcast.author?.name || 'Staff')}</span>
+        </div>
+      `;
+    }
+    if (dom.btnClearActiveBroadcast) dom.btnClearActiveBroadcast.classList.remove('hidden');
+  } else {
+    if (dom.adminBroadcastStatusPill) {
+      dom.adminBroadcastStatusPill.textContent = 'INACTIVE';
+      dom.adminBroadcastStatusPill.className = 'px-2 py-0.5 rounded-full text-[10px] font-mono text-slate-400 bg-slate-800 border border-slate-700';
+    }
+    if (dom.adminActiveBroadcastContent) {
+      dom.adminActiveBroadcastContent.innerHTML = `
+        <p class="text-xs text-slate-500 italic">No system broadcast is currently active on campus.</p>
+      `;
+    }
+    if (dom.btnClearActiveBroadcast) dom.btnClearActiveBroadcast.classList.add('hidden');
+  }
+}
+
+function updateBroadcastLivePreview() {
+  const title = dom.inputBroadcastTitle ? dom.inputBroadcastTitle.value.trim() : '';
+  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'normal';
+  const message = dom.inputBroadcastMessage ? dom.inputBroadcastMessage.value.trim() : '';
+
+  if (dom.previewBroadcastTitle) dom.previewBroadcastTitle.textContent = title || 'Announcement Title';
+  if (dom.previewBroadcastMessage) dom.previewBroadcastMessage.textContent = message || 'Your broadcast message preview will appear here...';
+
+  if (dom.previewPriorityIcon) {
+    dom.previewPriorityIcon.textContent = priority === 'critical' ? '🚨' : priority === 'urgent' ? '⚡' : '📢';
+  }
+
+  if (dom.broadcastPreviewBox) {
+    if (priority === 'critical') {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-red-950/40 border border-red-500/50 flex items-start gap-2.5';
+    } else if (priority === 'urgent') {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-amber-950/40 border border-amber-500/50 flex items-start gap-2.5';
+    } else {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-indigo-950/40 border border-indigo-500/50 flex items-start gap-2.5';
+    }
+  }
+}
+
+async function handlePublishBroadcastSubmit() {
+  const title = dom.inputBroadcastTitle ? dom.inputBroadcastTitle.value.trim() : '';
+  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'normal';
+  const message = dom.inputBroadcastMessage ? dom.inputBroadcastMessage.value.trim() : '';
+
+  if (!message) {
+    alert('Please enter a message to broadcast.');
+    return;
+  }
+
+  try {
+    await callAdminApi('/api/admin/broadcast/set', {
+      method: 'POST',
+      body: { title: title || 'Campus Notice', priority, message }
+    });
+    alert('Announcement broadcasted to all connected students in real-time!');
+    if (dom.inputBroadcastTitle) dom.inputBroadcastTitle.value = '';
+    if (dom.inputBroadcastMessage) dom.inputBroadcastMessage.value = '';
+    fetchAdminBroadcast();
+  } catch (err) {
+    alert(`Failed to publish broadcast: ${err.message}`);
+  }
+}
+
+async function handleClearBroadcastSubmit() {
+  if (!confirm('Are you sure you want to dismiss and clear the active broadcast banner across campus?')) return;
+  try {
+    await callAdminApi('/api/admin/broadcast/clear', {
+      method: 'POST'
+    });
+    fetchAdminBroadcast();
+  } catch (err) {
+    alert(`Failed to clear broadcast: ${err.message}`);
+  }
+}
+
+// ==========================================
+// TAB 6: AUDIT LOGS & ACTION TRAILS
+// ==========================================
+async function fetchAdminAuditLogs() {
+  try {
+    const data = await callAdminApi('/api/admin/audit');
+    state.adminData.auditLogs = data.auditLogs || [];
+    renderAdminAuditLogs();
+  } catch (err) {
+    console.error('Failed to load audit logs:', err);
+  }
+}
+
+function renderAdminAuditLogs() {
+  if (!dom.adminAuditStream) return;
+  dom.adminAuditStream.innerHTML = '';
+
+  const logs = state.adminData.auditLogs;
+  if (logs.length === 0) {
+    if (dom.adminAuditEmpty) dom.adminAuditEmpty.classList.remove('hidden');
+    return;
+  }
+  if (dom.adminAuditEmpty) dom.adminAuditEmpty.classList.add('hidden');
+
+  logs.forEach(log => {
+    const item = document.createElement('div');
+    item.className = 'p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs flex items-start justify-between gap-4 hover:border-slate-700 transition';
+
+    const actionColors = {
+      'BAN_USER': 'bg-red-950 text-red-300 border-red-500/40',
+      'UNBAN_USER': 'bg-emerald-950 text-emerald-300 border-emerald-500/40',
+      'MUTE_USER': 'bg-amber-950 text-amber-300 border-amber-500/40',
+      'UNMUTE_USER': 'bg-slate-800 text-slate-300 border-slate-700',
+      'KICK_USER': 'bg-orange-950 text-orange-300 border-orange-500/40',
+      'CHANGE_ROLE': 'bg-purple-950 text-purple-300 border-purple-500/40',
+      'LOCK_CHANNEL': 'bg-amber-950 text-amber-300 border-amber-500/40',
+      'UNLOCK_CHANNEL': 'bg-emerald-950 text-emerald-300 border-emerald-500/40',
+      'CREATE_CHANNEL': 'bg-indigo-950 text-indigo-300 border-indigo-500/40',
+      'DELETE_CHANNEL': 'bg-red-950 text-red-300 border-red-500/40',
+      'PURGE_CHANNEL': 'bg-rose-950 text-rose-300 border-rose-500/40',
+      'SET_BROADCAST': 'bg-sky-950 text-sky-300 border-sky-500/40',
+      'CLEAR_BROADCAST': 'bg-slate-800 text-slate-400 border-slate-700',
+      'DELETE_MESSAGE': 'bg-rose-950 text-rose-300 border-rose-500/40'
+    };
+
+    const pillClass = actionColors[log.action] || 'bg-slate-800 text-slate-300 border-slate-700';
+
+    item.innerHTML = `
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <span class="px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${pillClass}">${log.action}</span>
+          <span class="text-slate-300 font-semibold">${escapeHtml(log.performedBy?.name || 'Staff')}</span>
+          <span class="text-slate-500 font-mono text-[10px]">(${escapeHtml(log.performedBy?.email || '')})</span>
+        </div>
+        <p class="text-slate-400 break-words leading-relaxed">${escapeHtml(log.details || '')}</p>
+      </div>
+      <div class="text-[11px] text-slate-500 shrink-0 font-mono whitespace-nowrap">
+        ${log.formattedTime || formatClientTimestamp(log.timestamp)}
+      </div>
+    `;
+
+    dom.adminAuditStream.appendChild(item);
+  });
+}
+
+// ==========================================
+// INITIALIZE ADMIN CONSOLE LISTENERS
+// ==========================================
+function initAdminConsoleListeners() {
+  // Header Trigger to Open Modal
+  if (dom.btnOpenAdminPanel) {
+    dom.btnOpenAdminPanel.addEventListener('click', () => openAdminPanel('overview'));
+  }
+
+  // Modal Close Buttons
+  if (dom.btnCloseAdminPanel) {
+    dom.btnCloseAdminPanel.addEventListener('click', closeAdminPanel);
+  }
+  if (dom.btnDismissAdminModal) {
+    dom.btnDismissAdminModal.addEventListener('click', closeAdminPanel);
+  }
+  if (dom.modalAdmin) {
+    dom.modalAdmin.addEventListener('click', (e) => {
+      if (e.target === dom.modalAdmin) {
+        closeAdminPanel();
+      }
+    });
+  }
+
+  // Admin Tab Navigation
+  if (dom.adminTabBtns) {
+    dom.adminTabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-admin-tab');
+        if (tab) switchAdminTab(tab);
+      });
+    });
+  }
+
+  // Overview Tab Quick Action Buttons
+  if (dom.btnQuickNavBroadcast) {
+    dom.btnQuickNavBroadcast.addEventListener('click', () => switchAdminTab('broadcast'));
+  }
+  if (dom.btnQuickNavChannels) {
+    dom.btnQuickNavChannels.addEventListener('click', () => switchAdminTab('channels'));
+  }
+  if (dom.btnQuickRefreshOverview) {
+    dom.btnQuickRefreshOverview.addEventListener('click', fetchAdminStats);
+  }
+  if (dom.btnQuickClearChat) {
+    dom.btnQuickClearChat.addEventListener('click', () => {
+      if (confirm(`Purge current channel #${state.currentRoom}?`)) {
+        callAdminApi('/api/admin/channels/purge', {
+          method: 'POST',
+          body: { channelId: state.currentRoom }
+        }).catch(e => alert(e.message));
+      }
+    });
+  }
+
+  // Members Tab Controls
+  if (dom.btnRefreshMembers) {
+    dom.btnRefreshMembers.addEventListener('click', fetchAdminMembers);
+  }
+  if (dom.adminMemberSearch) {
+    dom.adminMemberSearch.addEventListener('input', renderAdminMembersTable);
+  }
+  if (dom.adminMemberRoleFilter) {
+    dom.adminMemberRoleFilter.addEventListener('change', renderAdminMembersTable);
+  }
+
+  // Channels Tab Controls
+  if (dom.btnToggleCreateChannelForm) {
+    dom.btnToggleCreateChannelForm.addEventListener('click', () => toggleCreateChannelForm(true));
+  }
+  if (dom.btnCancelCreateChannel) {
+    dom.btnCancelCreateChannel.addEventListener('click', () => toggleCreateChannelForm(false));
+  }
+  if (dom.btnSubmitCreateChannel) {
+    dom.btnSubmitCreateChannel.addEventListener('click', handleCreateChannelSubmit);
+  }
+
+  // Messages Moderation Controls
+  if (dom.btnRefreshAdminMessages) {
+    dom.btnRefreshAdminMessages.addEventListener('click', fetchAdminMessages);
+  }
+  if (dom.adminMsgRoomFilter) {
+    dom.adminMsgRoomFilter.addEventListener('change', fetchAdminMessages);
+  }
+  if (dom.adminMsgSearch) {
+    let msgSearchTimeout = null;
+    dom.adminMsgSearch.addEventListener('input', () => {
+      clearTimeout(msgSearchTimeout);
+      msgSearchTimeout = setTimeout(fetchAdminMessages, 300);
+    });
+  }
+
+  // Announcements Tab Controls
+  if (dom.inputBroadcastTitle) {
+    dom.inputBroadcastTitle.addEventListener('input', updateBroadcastLivePreview);
+  }
+  if (dom.inputBroadcastPriority) {
+    dom.inputBroadcastPriority.addEventListener('change', updateBroadcastLivePreview);
+  }
+  if (dom.inputBroadcastMessage) {
+    dom.inputBroadcastMessage.addEventListener('input', updateBroadcastLivePreview);
+  }
+  if (dom.btnPublishBroadcast) {
+    dom.btnPublishBroadcast.addEventListener('click', handlePublishBroadcastSubmit);
+  }
+  if (dom.btnClearActiveBroadcast) {
+    dom.btnClearActiveBroadcast.addEventListener('click', handleClearBroadcastSubmit);
+  }
+
+  // Dismiss System Broadcast Banner button in Header
+  if (dom.btnDismissBroadcast) {
+    dom.btnDismissBroadcast.addEventListener('click', () => {
+      if (dom.systemBroadcastBanner) {
+        dom.systemBroadcastBanner.classList.add('hidden');
+        dom.systemBroadcastBanner.classList.remove('flex');
+      }
+    });
+  }
+
+  // Audit Logs Refresh Button
+  if (dom.btnRefreshAudit) {
+    dom.btnRefreshAudit.addEventListener('click', fetchAdminAuditLogs);
+  }
 }
 
 // Initial Boot

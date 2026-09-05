@@ -394,16 +394,138 @@ async function markMessagesAsSeen(roomId, messageIds, user) {
   return updatedList;
 }
 
-// Map<uid, { uid, name, picture, email, updatedAt }>
+// ==========================================
+// 2B. ADMIN, MODERATION & AUDIT LOG STATE
+// ==========================================
+// Designated Super-Admin / Owner email from environment credentials
+const OWNER_EMAIL = 'sianbirmaken.svkm@gmail.com';
+
+// Map<uid, 'admin' | 'moderator' | 'student'>
+const userRoles = new Map();
+// Set of muted uids: Set<uid>
+const mutedUsers = new Set();
+// Set of banned uids: Set<uid>
+const bannedUsers = new Set();
+// Audit log entries: Array<{ id, action, actorUid, actorName, details, timestamp }>
+const auditLogs = [];
+// Active campus-wide system announcement
+let activeSystemBroadcast = null;
+
+// Determine authoritative role for a given user
+function getUserRole(uid, email = '') {
+  if (email && email.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+    return 'admin';
+  }
+  return userRoles.get(uid) || 'student';
+}
+
+// Check if user has staff privileges (Admin or Moderator)
+function isUserStaff(uid, email = '') {
+  const role = getUserRole(uid, email);
+  return role === 'admin' || role === 'moderator';
+}
+
+// Check if user has primary Administrator privileges
+function isUserAdmin(uid, email = '') {
+  return getUserRole(uid, email) === 'admin';
+}
+
+// Record an administrative or moderation action in audit trail
+async function recordAuditLog(action, actorUser, details) {
+  const logEntry = {
+    id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    action,
+    actorUid: actorUser?.uid || 'system',
+    actorName: actorUser?.name || actorUser?.email || 'Campus Administrator',
+    details,
+    timestamp: Date.now()
+  };
+  auditLogs.unshift(logEntry);
+  if (auditLogs.length > 200) auditLogs.pop();
+
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('audit_logs').doc(logEntry.id).set(logEntry);
+    } catch (e) {
+      handleFirestoreError(e, 'Save audit log');
+    }
+  }
+  return logEntry;
+}
+
+// Helper to delete a message across memory and Firestore
+async function deleteMessage(messageId, roomId = null) {
+  let targetRoomId = roomId;
+  if (!targetRoomId) {
+    for (const [rId, msgs] of roomHistories.entries()) {
+      const idx = msgs.findIndex(m => m.id === messageId);
+      if (idx !== -1) {
+        targetRoomId = rId;
+        msgs.splice(idx, 1);
+        break;
+      }
+    }
+  } else {
+    const msgs = roomHistories.get(targetRoomId) || [];
+    const idx = msgs.findIndex(m => m.id === messageId);
+    if (idx !== -1) {
+      msgs.splice(idx, 1);
+    }
+  }
+
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('messages').doc(messageId).delete();
+    } catch (e) {
+      handleFirestoreError(e, `Delete message ${messageId}`);
+    }
+  }
+
+  return targetRoomId;
+}
+
+// Helper to purge room history
+async function purgeChannelHistory(channelId) {
+  roomHistories.set(channelId, []);
+
+  if (firestoreDb) {
+    try {
+      const snapshot = await firestoreDb.collection('messages')
+        .where('roomId', '==', channelId)
+        .limit(300)
+        .get();
+
+      if (!snapshot.empty) {
+        const batch = firestoreDb.batch();
+        snapshot.forEach(doc => {
+          batch.delete(doc.ref);
+        });
+        await batch.commit();
+      }
+    } catch (e) {
+      handleFirestoreError(e, `Purge channel ${channelId}`);
+    }
+  }
+}
+
+// Map<uid, { uid, name, picture, email, role, isMuted, isBanned, updatedAt }>
 const savedProfiles = new Map();
 
 // Helper to save and sync user profile in memory and Firestore
 async function saveUserProfile(uid, profileData) {
   const existing = savedProfiles.get(uid) || {};
+  const userEmail = profileData.email || existing.email || '';
+  const role = profileData.role || getUserRole(uid, userEmail);
+  const isMuted = profileData.isMuted !== undefined ? profileData.isMuted : mutedUsers.has(uid);
+  const isBanned = profileData.isBanned !== undefined ? profileData.isBanned : bannedUsers.has(uid);
+
   const updated = {
     ...existing,
     ...profileData,
     uid,
+    role,
+    isMuted,
+    isBanned,
     updatedAt: Date.now()
   };
   savedProfiles.set(uid, updated);
@@ -413,6 +535,9 @@ async function saveUserProfile(uid, profileData) {
   if (activeUser) {
     if (updated.name) activeUser.name = updated.name;
     if (updated.picture !== undefined) activeUser.picture = updated.picture;
+    activeUser.role = role;
+    activeUser.isMuted = isMuted;
+    activeUser.isBanned = isBanned;
   }
 
   // Update sender avatar and name in cached room histories
@@ -433,10 +558,13 @@ async function saveUserProfile(uid, profileData) {
         name: updated.name,
         picture: updated.picture || null,
         email: updated.email || activeUser?.email || '',
+        role: updated.role,
+        isMuted: updated.isMuted,
+        isBanned: updated.isBanned,
         status: activeUser?.status || 'online',
         updatedAt: FieldValue.serverTimestamp()
       }, { merge: true });
-      console.log(`💾 [Firestore] Saved user profile for ${uid} (${updated.name})`);
+      console.log(`💾 [Firestore] Saved user profile for ${uid} (${updated.name}) [${role}]`);
     } catch (fsErr) {
       handleFirestoreError(fsErr, `User profile update for ${uid}`);
     }
@@ -459,7 +587,10 @@ function getOnlineUsersList() {
       email: user.email,
       picture: user.picture,
       status: user.status || 'online',
-      currentRoom: user.currentRoom || 'general'
+      currentRoom: user.currentRoom || 'general',
+      role: getUserRole(user.uid, user.email),
+      isMuted: mutedUsers.has(user.uid),
+      isBanned: bannedUsers.has(user.uid)
     });
   });
   return list;
@@ -608,6 +739,556 @@ app.post('/api/clear-memory', async (req, res) => {
 });
 
 // ==========================================
+// 3B. ADMIN & MODERATION API ROUTES
+// ==========================================
+
+// Middleware: Authenticate and require staff role (admin or moderator)
+async function requireStaffAuth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const clientUser = req.body?.clientUser || (req.query?.clientUser ? JSON.parse(req.query.clientUser) : null);
+    const verifiedUser = await verifyAuthToken(token, clientUser);
+
+    if (!isUserStaff(verifiedUser.uid, verifiedUser.email)) {
+      return res.status(403).json({ error: 'Permission denied: Staff access required.' });
+    }
+    req.staffUser = verifiedUser;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Unauthorized: ' + (err.message || 'Authentication required') });
+  }
+}
+
+// Middleware: Authenticate and require primary administrator role
+async function requireAdminAuth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const clientUser = req.body?.clientUser || (req.query?.clientUser ? JSON.parse(req.query.clientUser) : null);
+    const verifiedUser = await verifyAuthToken(token, clientUser);
+
+    if (!isUserAdmin(verifiedUser.uid, verifiedUser.email)) {
+      return res.status(403).json({ error: 'Permission denied: Administrator privileges required.' });
+    }
+    req.adminUser = verifiedUser;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Unauthorized: ' + (err.message || 'Authentication required') });
+  }
+}
+
+// 1. Admin Telemetry & System Overview
+app.get('/api/admin/overview', requireStaffAuth, (req, res) => {
+  let totalMessagesCount = 0;
+  roomHistories.forEach(list => {
+    totalMessagesCount += list.length;
+  });
+
+  const channelsStats = CHANNELS.map(ch => {
+    const msgs = roomHistories.get(ch.id) || [];
+    let occupants = 0;
+    activeUsers.forEach(u => {
+      if (u.currentRoom === ch.id) occupants++;
+    });
+    return {
+      ...ch,
+      messageCount: msgs.length,
+      occupantsCount: occupants,
+      isLocked: Boolean(ch.isLocked)
+    };
+  });
+
+  res.json({
+    stats: {
+      totalMembers: Math.max(savedProfiles.size, activeUsers.size, 1),
+      activeOnline: activeUsers.size,
+      totalMessages: totalMessagesCount,
+      channelsCount: CHANNELS.length,
+      uptimeSeconds: Math.floor(process.uptime()),
+      mutedCount: mutedUsers.size,
+      bannedCount: bannedUsers.size,
+      firebaseReady: isFirebaseAdminReady,
+      firestoreDbId: firebaseAppletConfig?.firestoreDatabaseId || 'default'
+    },
+    channels: channelsStats,
+    recentAuditLogs: auditLogs.slice(0, 30),
+    activeBroadcast: activeSystemBroadcast
+  });
+});
+
+// 2. Member Management: Get all known members with roles and activity
+app.get('/api/admin/members', requireStaffAuth, async (req, res) => {
+  const membersMap = new Map();
+
+  // Populate from savedProfiles
+  savedProfiles.forEach((profile, uid) => {
+    membersMap.set(uid, {
+      uid: profile.uid,
+      name: profile.name,
+      email: profile.email,
+      picture: profile.picture,
+      role: getUserRole(uid, profile.email),
+      isMuted: mutedUsers.has(uid),
+      isBanned: bannedUsers.has(uid),
+      status: 'offline',
+      lastSeen: profile.updatedAt || Date.now()
+    });
+  });
+
+  // Overlay with active connected users
+  activeUsers.forEach((user, uid) => {
+    const existing = membersMap.get(uid) || {};
+    membersMap.set(uid, {
+      ...existing,
+      uid,
+      name: user.name || existing.name || 'Classmate',
+      email: user.email || existing.email || '',
+      picture: user.picture || existing.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || 'Friend')}&background=4f46e5&color=fff`,
+      role: getUserRole(uid, user.email || existing.email),
+      isMuted: mutedUsers.has(uid),
+      isBanned: bannedUsers.has(uid),
+      status: user.status || 'online',
+      currentRoom: user.currentRoom || 'general',
+      lastSeen: Date.now()
+    });
+  });
+
+  // Calculate message count per member
+  const msgCounts = new Map();
+  roomHistories.forEach((msgs) => {
+    msgs.forEach((m) => {
+      const senderUid = m.sender?.uid;
+      if (senderUid) {
+        msgCounts.set(senderUid, (msgCounts.get(senderUid) || 0) + 1);
+      }
+    });
+  });
+
+  const membersList = Array.from(membersMap.values()).map(m => ({
+    ...m,
+    messageCount: msgCounts.get(m.uid) || 0,
+    isOwner: Boolean(m.email && m.email.toLowerCase() === OWNER_EMAIL.toLowerCase())
+  }));
+
+  res.json({ members: membersList });
+});
+
+// 3. Member Role Assignment
+app.post('/api/admin/members/role', requireAdminAuth, async (req, res) => {
+  try {
+    const { targetUid, role } = req.body;
+    if (!targetUid || !role) {
+      return res.status(400).json({ error: 'targetUid and role are required' });
+    }
+    if (!['admin', 'moderator', 'student'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role specified' });
+    }
+
+    const memberProfile = savedProfiles.get(targetUid) || activeUsers.get(targetUid);
+    if (memberProfile?.email && memberProfile.email.toLowerCase() === OWNER_EMAIL.toLowerCase() && role !== 'admin') {
+      return res.status(400).json({ error: 'Primary owner role cannot be changed' });
+    }
+
+    userRoles.set(targetUid, role);
+    await saveUserProfile(targetUid, { role });
+
+    await recordAuditLog('ROLE_CHANGE', req.adminUser, `Changed role of user ${targetUid} (${memberProfile?.name || 'User'}) to ${role}`);
+
+    io.emit('user:role_updated', { uid: targetUid, role });
+    io.emit('users:presence', getOnlineUsersList());
+
+    res.json({ success: true, targetUid, role });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Mute / Unmute Member
+app.post('/api/admin/members/mute', requireStaffAuth, async (req, res) => {
+  try {
+    const { targetUid, muted, reason } = req.body;
+    if (!targetUid) return res.status(400).json({ error: 'targetUid is required' });
+
+    const memberProfile = savedProfiles.get(targetUid) || activeUsers.get(targetUid);
+    if (memberProfile?.email && memberProfile.email.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      return res.status(400).json({ error: 'Cannot mute primary campus administrator' });
+    }
+
+    if (muted) {
+      mutedUsers.add(targetUid);
+    } else {
+      mutedUsers.delete(targetUid);
+    }
+
+    await saveUserProfile(targetUid, { isMuted: Boolean(muted) });
+    await recordAuditLog(muted ? 'MUTE_USER' : 'UNMUTE_USER', req.staffUser, `${muted ? 'Muted' : 'Unmuted'} ${memberProfile?.name || targetUid}${reason ? ` (Reason: ${reason})` : ''}`);
+
+    io.to(`user_${targetUid}`).emit('admin:user_muted_status', {
+      isMuted: Boolean(muted),
+      reason: reason || (muted ? 'You have been muted by a staff member.' : 'Your mute restriction has been removed.')
+    });
+
+    io.emit('users:presence', getOnlineUsersList());
+    res.json({ success: true, targetUid, isMuted: Boolean(muted) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Kick Active Session
+app.post('/api/admin/members/kick', requireStaffAuth, async (req, res) => {
+  try {
+    const { targetUid, reason } = req.body;
+    if (!targetUid) return res.status(400).json({ error: 'targetUid is required' });
+
+    const memberProfile = savedProfiles.get(targetUid) || activeUsers.get(targetUid);
+    if (memberProfile?.email && memberProfile.email.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      return res.status(400).json({ error: 'Cannot kick primary campus administrator' });
+    }
+
+    const active = activeUsers.get(targetUid);
+    if (active && active.sockets) {
+      active.sockets.forEach(socketId => {
+        const targetSocket = io.sockets.sockets.get(socketId);
+        if (targetSocket) {
+          targetSocket.emit('auth:kicked', {
+            reason: reason || 'You were disconnected by a campus administrator.'
+          });
+          targetSocket.disconnect(true);
+        }
+      });
+      activeUsers.delete(targetUid);
+    }
+
+    await recordAuditLog('KICK_USER', req.staffUser, `Kicked active session for ${memberProfile?.name || targetUid}${reason ? ` (Reason: ${reason})` : ''}`);
+    io.emit('users:presence', getOnlineUsersList());
+
+    res.json({ success: true, targetUid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Ban / Unban User Account
+app.post('/api/admin/members/ban', requireAdminAuth, async (req, res) => {
+  try {
+    const { targetUid, banned, reason } = req.body;
+    if (!targetUid) return res.status(400).json({ error: 'targetUid is required' });
+
+    const memberProfile = savedProfiles.get(targetUid) || activeUsers.get(targetUid);
+    if (memberProfile?.email && memberProfile.email.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      return res.status(400).json({ error: 'Cannot ban primary campus administrator' });
+    }
+
+    if (banned) {
+      bannedUsers.add(targetUid);
+      // Disconnect all active sockets
+      const active = activeUsers.get(targetUid);
+      if (active && active.sockets) {
+        active.sockets.forEach(socketId => {
+          const targetSocket = io.sockets.sockets.get(socketId);
+          if (targetSocket) {
+            targetSocket.emit('auth:banned', {
+              reason: reason || 'Your account has been suspended by an administrator.'
+            });
+            targetSocket.disconnect(true);
+          }
+        });
+        activeUsers.delete(targetUid);
+      }
+    } else {
+      bannedUsers.delete(targetUid);
+    }
+
+    await saveUserProfile(targetUid, { isBanned: Boolean(banned) });
+    await recordAuditLog(banned ? 'BAN_USER' : 'UNBAN_USER', req.adminUser, `${banned ? 'Suspended' : 'Unbanned'} user account ${memberProfile?.name || targetUid}${reason ? ` (Reason: ${reason})` : ''}`);
+
+    io.emit('users:presence', getOnlineUsersList());
+    res.json({ success: true, targetUid, isBanned: Boolean(banned) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Channel Management: Create New Channel
+app.post('/api/admin/channels/create', requireStaffAuth, async (req, res) => {
+  try {
+    const { name, topic, icon } = req.body;
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: 'Channel name is required' });
+    }
+
+    const cleanSlug = name.toLowerCase().replace(/^#+/, '').trim().replace(/[^a-z0-9\-]/g, '-').replace(/-+/g, '-');
+    if (!cleanSlug || cleanSlug.length < 2) {
+      return res.status(400).json({ error: 'Valid alphanumeric channel slug required' });
+    }
+
+    if (CHANNELS.some(c => c.id === cleanSlug)) {
+      return res.status(400).json({ error: `Channel #${cleanSlug} already exists` });
+    }
+
+    const newChannel = {
+      id: cleanSlug,
+      name: `#${cleanSlug}`,
+      topic: (typeof topic === 'string' && topic.trim()) ? topic.trim() : 'Campus discussions',
+      icon: (typeof icon === 'string' && icon.trim()) ? icon.trim() : 'message-square',
+      isLocked: false
+    };
+
+    CHANNELS.push(newChannel);
+    roomHistories.set(newChannel.id, []);
+
+    // Persist to Firestore /channels/{channelId}
+    if (firestoreDb) {
+      try {
+        await firestoreDb.collection('channels').doc(newChannel.id).set(newChannel);
+      } catch (e) {
+        handleFirestoreError(e, `Create channel ${newChannel.id}`);
+      }
+    }
+
+    // Join all active sockets to this new channel
+    io.sockets.sockets.forEach(sock => {
+      sock.join(newChannel.id);
+    });
+
+    await recordAuditLog('CREATE_CHANNEL', req.staffUser, `Created channel #${newChannel.id} (${newChannel.topic})`);
+    io.emit('channel:created', newChannel);
+
+    res.json({ success: true, channel: newChannel });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. Channel Management: Edit Channel Topic / Name
+app.post('/api/admin/channels/edit', requireStaffAuth, async (req, res) => {
+  try {
+    const { channelId, topic, name } = req.body;
+    if (!channelId) return res.status(400).json({ error: 'channelId is required' });
+
+    const channel = CHANNELS.find(c => c.id === channelId);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+
+    if (typeof topic === 'string') channel.topic = topic.trim();
+    if (typeof name === 'string' && name.trim()) {
+      channel.name = name.startsWith('#') ? name.trim() : `#${name.trim()}`;
+    }
+
+    if (firestoreDb) {
+      try {
+        await firestoreDb.collection('channels').doc(channelId).set(channel, { merge: true });
+      } catch (e) {
+        handleFirestoreError(e, `Update channel ${channelId}`);
+      }
+    }
+
+    await recordAuditLog('EDIT_CHANNEL', req.staffUser, `Updated channel #${channel.id} details`);
+    io.emit('channel:updated', channel);
+
+    res.json({ success: true, channel });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Channel Management: Lock / Unlock Channel (Read-Only Mode)
+app.post('/api/admin/channels/lock', requireStaffAuth, async (req, res) => {
+  try {
+    const { channelId, locked } = req.body;
+    if (!channelId) return res.status(400).json({ error: 'channelId is required' });
+
+    const channel = CHANNELS.find(c => c.id === channelId);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+
+    channel.isLocked = Boolean(locked);
+
+    if (firestoreDb) {
+      try {
+        await firestoreDb.collection('channels').doc(channelId).set({ isLocked: channel.isLocked }, { merge: true });
+      } catch (e) {
+        handleFirestoreError(e, `Lock channel ${channelId}`);
+      }
+    }
+
+    await recordAuditLog(channel.isLocked ? 'LOCK_CHANNEL' : 'UNLOCK_CHANNEL', req.staffUser, `${channel.isLocked ? 'Locked' : 'Unlocked'} #${channel.id} (Read-only mode: ${channel.isLocked})`);
+    io.emit('channel:lock_status', { channelId, isLocked: channel.isLocked });
+
+    res.json({ success: true, channelId, isLocked: channel.isLocked });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. Channel Management: Purge Channel History
+app.post('/api/admin/channels/purge', requireAdminAuth, async (req, res) => {
+  try {
+    const { channelId } = req.body;
+    if (!channelId) return res.status(400).json({ error: 'channelId is required' });
+
+    const channel = CHANNELS.find(c => c.id === channelId);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+
+    await purgeChannelHistory(channelId);
+    await recordAuditLog('PURGE_CHANNEL', req.adminUser, `Purged all chat messages from channel #${channelId}`);
+
+    io.to(channelId).emit('room:history_cleared', { roomId: channelId, timestamp: Date.now() });
+
+    res.json({ success: true, channelId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. Channel Management: Delete Custom Channel
+app.delete('/api/admin/channels/:channelId', requireAdminAuth, async (req, res) => {
+  try {
+    const { channelId } = req.params;
+    if (!channelId) return res.status(400).json({ error: 'channelId is required' });
+    if (channelId === 'general') {
+      return res.status(400).json({ error: 'Cannot delete the default #general channel' });
+    }
+
+    const index = CHANNELS.findIndex(c => c.id === channelId);
+    if (index === -1) return res.status(404).json({ error: 'Channel not found' });
+
+    CHANNELS.splice(index, 1);
+    roomHistories.delete(channelId);
+
+    if (firestoreDb) {
+      try {
+        await firestoreDb.collection('channels').doc(channelId).delete();
+      } catch (e) {
+        handleFirestoreError(e, `Delete channel ${channelId}`);
+      }
+    }
+
+    await recordAuditLog('DELETE_CHANNEL', req.adminUser, `Deleted channel #${channelId}`);
+    io.emit('channel:deleted', { channelId });
+
+    res.json({ success: true, channelId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. Message Moderation: Search & List Messages
+app.get('/api/admin/messages', requireStaffAuth, (req, res) => {
+  const { roomId, query, limit = 50 } = req.query;
+  const maxLimit = Math.min(parseInt(limit) || 50, 100);
+
+  let pool = [];
+  if (roomId && roomHistories.has(roomId)) {
+    pool = [...roomHistories.get(roomId)];
+  } else {
+    roomHistories.forEach(msgs => {
+      pool.push(...msgs);
+    });
+  }
+
+  // Sort descending
+  pool.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+  if (query && typeof query === 'string' && query.trim()) {
+    const q = query.trim().toLowerCase();
+    pool = pool.filter(m => 
+      (m.content && m.content.toLowerCase().includes(q)) ||
+      (m.sender?.name && m.sender.name.toLowerCase().includes(q)) ||
+      (m.sender?.email && m.sender.email.toLowerCase().includes(q))
+    );
+  }
+
+  res.json({ messages: pool.slice(0, maxLimit) });
+});
+
+// 13. Message Moderation: Delete Violating Message
+app.delete('/api/admin/messages/:messageId', requireStaffAuth, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { roomId } = req.query;
+    if (!messageId) return res.status(400).json({ error: 'messageId is required' });
+
+    const targetRoomId = await deleteMessage(messageId, roomId);
+
+    await recordAuditLog('DELETE_MESSAGE', req.staffUser, `Deleted message ${messageId} in room ${targetRoomId || 'general'}`);
+    io.emit('message:deleted', { messageId, roomId: targetRoomId });
+
+    res.json({ success: true, messageId, roomId: targetRoomId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 14. Message Moderation: Pin / Unpin Announcement Message
+app.post('/api/admin/messages/pin', requireStaffAuth, async (req, res) => {
+  try {
+    const { messageId, roomId, pinned } = req.body;
+    if (!messageId || !roomId) return res.status(400).json({ error: 'messageId and roomId required' });
+
+    const history = roomHistories.get(roomId) || [];
+    const msg = history.find(m => m.id === messageId);
+    if (msg) {
+      msg.isPinned = Boolean(pinned);
+    }
+
+    if (firestoreDb) {
+      try {
+        await firestoreDb.collection('messages').doc(messageId).set({ isPinned: Boolean(pinned) }, { merge: true });
+      } catch (e) {
+        handleFirestoreError(e, `Pin message ${messageId}`);
+      }
+    }
+
+    await recordAuditLog(pinned ? 'PIN_MESSAGE' : 'UNPIN_MESSAGE', req.staffUser, `${pinned ? 'Pinned' : 'Unpinned'} message in #${roomId}`);
+    io.to(roomId).emit('message:pinned_update', { messageId, roomId, isPinned: Boolean(pinned) });
+
+    res.json({ success: true, messageId, roomId, isPinned: Boolean(pinned) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 15. Campus Announcement System Broadcast
+app.post('/api/admin/broadcast', requireStaffAuth, async (req, res) => {
+  try {
+    const { title, message, priority, active } = req.body;
+
+    if (active === false) {
+      activeSystemBroadcast = null;
+      await recordAuditLog('CLEAR_BROADCAST', req.staffUser, 'Cleared active campus broadcast banner');
+      io.emit('admin:system_broadcast', null);
+      return res.json({ success: true, broadcast: null });
+    }
+
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'Broadcast message body is required' });
+    }
+
+    activeSystemBroadcast = {
+      id: `bc_${Date.now()}`,
+      title: (title && typeof title === 'string') ? title.trim() : 'Official Campus Announcement',
+      message: message.trim(),
+      priority: ['info', 'warning', 'urgent', 'celebration'].includes(priority) ? priority : 'info',
+      createdAt: Date.now(),
+      authorName: req.staffUser?.name || 'Campus Administration'
+    };
+
+    await recordAuditLog('SEND_BROADCAST', req.staffUser, `Published broadcast: "${activeSystemBroadcast.title}" (${activeSystemBroadcast.priority.toUpperCase()})`);
+    io.emit('admin:system_broadcast', activeSystemBroadcast);
+
+    res.json({ success: true, broadcast: activeSystemBroadcast });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 16. Audit Log History
+app.get('/api/admin/audit-logs', requireStaffAuth, (req, res) => {
+  res.json({ auditLogs });
+});
+
+// ==========================================
 // 4. SOCKET.IO SETUP & AUTHENTICATION
 // ==========================================
 const io = new Server(server, {
@@ -670,7 +1351,15 @@ io.on('connection', async (socket) => {
     }
   }
 
+  // Check if account is banned
+  if (bannedUsers.has(uid)) {
+    socket.emit('auth:banned', { reason: 'Your campus account has been suspended by an administrator.' });
+    socket.disconnect(true);
+    return;
+  }
+
   // Register in active users map
+  const userRole = getUserRole(uid, user.email);
   if (!activeUsers.has(uid)) {
     activeUsers.set(uid, {
       uid: user.uid,
@@ -680,6 +1369,9 @@ io.on('connection', async (socket) => {
       sockets: new Set([socket.id]),
       currentRoom: 'general',
       status: 'online',
+      role: userRole,
+      isMuted: mutedUsers.has(uid),
+      isBanned: false,
       lastSeen: Date.now()
     });
   } else {
@@ -687,14 +1379,24 @@ io.on('connection', async (socket) => {
     existing.sockets.add(socket.id);
     existing.name = user.name || existing.name;
     existing.picture = user.picture || existing.picture;
+    existing.role = userRole;
+    existing.isMuted = mutedUsers.has(uid);
   }
 
-  // Sync profile data back to client in case they have a stored profile
+  // Sync profile data back to client including administrative role
   socket.emit('user:profile_sync', {
     uid: user.uid,
     name: user.name,
-    picture: user.picture
+    picture: user.picture,
+    role: userRole,
+    isMuted: mutedUsers.has(uid),
+    isBanned: false
   });
+
+  // Sync any active campus announcement broadcast
+  if (activeSystemBroadcast) {
+    socket.emit('admin:system_broadcast', activeSystemBroadcast);
+  }
 
   // Join personal user room for targeted notifications (e.g. direct messages)
   socket.join(`user_${uid}`);
@@ -829,6 +1531,22 @@ io.on('connection', async (socket) => {
   // EVENT: message:send
   // ------------------------------------------
   socket.on('message:send', async (data) => {
+    // 0. Account Ban & Mute Moderation Enforcements
+    if (bannedUsers.has(user.uid)) {
+      socket.emit('auth:banned', { reason: 'Your campus account has been suspended by an administrator.' });
+      socket.disconnect(true);
+      return;
+    }
+
+    if (mutedUsers.has(user.uid)) {
+      socket.emit('system:notice', {
+        roomId: data?.roomId || 'general',
+        text: '🔇 You are currently muted by campus staff and cannot send messages.',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
     // Rate limit check: max 12 messages per 4 seconds per socket
     if (isRateLimited(socket.id, 12, 4000)) {
       socket.emit('system:notice', {
@@ -841,6 +1559,17 @@ io.on('connection', async (socket) => {
 
     const { roomId, content, image, clientTempId } = data || {};
     if (!roomId) return;
+
+    // Check if channel is locked (read-only for non-staff)
+    const targetChannel = CHANNELS.find(c => c.id === roomId);
+    if (targetChannel && targetChannel.isLocked && !isUserStaff(user.uid, user.email)) {
+      socket.emit('system:notice', {
+        roomId,
+        text: `🔒 #${targetChannel.id} is currently locked by staff. New messages are restricted to administrators & moderators.`,
+        timestamp: Date.now()
+      });
+      return;
+    }
 
     const trimmedContent = (typeof content === 'string') ? content.trim() : '';
     const hasImage = typeof image === 'string' && image.startsWith('data:image/') && image.length < 3 * 1024 * 1024;

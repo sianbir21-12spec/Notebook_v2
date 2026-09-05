@@ -79,6 +79,19 @@
           "description": "Presence state indicator",
           "enum": ["online", "away", "studying"]
         },
+        "role": {
+          "type": "string",
+          "description": "Administrative authority role of the user",
+          "enum": ["admin", "moderator", "student"]
+        },
+        "isMuted": {
+          "type": "boolean",
+          "description": "Flag indicating if user is restricted from posting messages"
+        },
+        "isBanned": {
+          "type": "boolean",
+          "description": "Flag indicating if user account is suspended from platform"
+        },
         "lastSeen": {
           "type": "number",
           "description": "Epoch timestamp in milliseconds of last activity"
@@ -111,9 +124,45 @@
           "type": "string",
           "description": "Lucide icon key identifier",
           "maxLength": 64
+        },
+        "isLocked": {
+          "type": "boolean",
+          "description": "Whether the channel is locked in read-only mode by staff"
         }
       },
       "required": ["id", "name", "topic"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Security record of an administrative or moderation action",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique audit log identifier"
+        },
+        "action": {
+          "type": "string",
+          "description": "Action type executed by the administrator"
+        },
+        "actorUid": {
+          "type": "string",
+          "description": "UID of admin executing action"
+        },
+        "actorName": {
+          "type": "string",
+          "description": "Name of admin executing action"
+        },
+        "details": {
+          "type": "string",
+          "description": "Descriptive summary of the action and target"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds"
+        }
+      },
+      "required": ["id", "action", "actorUid", "timestamp"]
     }
   },
   "firestore": {
@@ -128,6 +177,10 @@
     "/channels/{channelId}": {
       "schema": "Channel",
       "description": "Predefined school channels available to all registered students"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Administrative records of moderation and management actions"
     }
   }
 }

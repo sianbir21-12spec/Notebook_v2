@@ -41,7 +41,10 @@ service cloud.firestore {
       return data.uid is string && data.uid == request.auth.uid && data.uid == userId
         && data.name is string && data.name.size() > 0 && data.name.size() <= 80
         && data.email is string && data.email.size() > 0 && data.email.size() <= 120
-        && (!('status' in data) || (data.status in ['online', 'away', 'studying']));
+        && (!('status' in data) || (data.status in ['online', 'away', 'studying']))
+        && (!('role' in data) || (data.role in ['admin', 'moderator', 'student']))
+        && (!('isMuted' in data) || data.isMuted is bool)
+        && (!('isBanned' in data) || data.isBanned is bool);
     }
 
     // Collection: Users (/users/{userId})
@@ -49,7 +52,9 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming(), userId);
       allow update: if isSignedIn() && isValidId(userId) && isValidUser(incoming(), userId)
-        && incoming().uid == existing().uid;
+        && incoming().uid == existing().uid
+        // Regular users cannot grant themselves admin/moderator roles or unmute themselves
+        && (!('role' in incoming()) || incoming().role == existing().role || !('role' in existing()));
       allow delete: if false;
     }
 
@@ -57,6 +62,12 @@ service cloud.firestore {
     match /channels/{channelId} {
       allow read: if isSignedIn();
       allow write: if false; // Predefined server channels
+    }
+
+    // Collection: Audit Logs (/audit_logs/{logId})
+    match /audit_logs/{logId} {
+      allow read: if isSignedIn();
+      allow write: if false; // Only server admin can create audit records
     }
 
     // Collection: Messages (/messages/{messageId})
