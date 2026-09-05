@@ -269,6 +269,7 @@ const dom = {
   btnQuickNavChannels: document.getElementById('btn-quick-nav-channels'),
   btnQuickRefreshOverview: document.getElementById('btn-quick-refresh-overview'),
   btnLockCampus: document.getElementById('btn-lock-campus'),
+  btnUnlockCampus: document.getElementById('btn-unlock-campus'),
   btnQuickClearChat: document.getElementById('btn-quick-clear-chat'),
 
   // Admin Tab: Members
@@ -4210,6 +4211,18 @@ function initAdminConsoleListeners() {
           method: 'POST'
         }).then(() => {
           alert('Campus Lockdown Initiated successfully.');
+          fetchAdminStats();
+        }).catch(e => alert(e.message));
+      }
+    });
+  }
+  if (dom.btnUnlockCampus) {
+    dom.btnUnlockCampus.addEventListener('click', () => {
+      if (confirm('🔓 Unlock Campus? This will restore read/write access to all locked channels.')) {
+        callAdminApi('/api/admin/campus/unlock', {
+          method: 'POST'
+        }).then(() => {
+          alert('Campus Unlocked successfully.');
           fetchAdminStats();
         }).catch(e => alert(e.message));
       }

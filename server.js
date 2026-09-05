@@ -1226,6 +1226,59 @@ app.post('/api/admin/campus/lockdown', requireAdminAuth, async (req, res) => {
   }
 });
 
+// 11.6 Campus Unlock (Unlock all channels)
+app.post('/api/admin/campus/unlock', requireAdminAuth, async (req, res) => {
+  try {
+    const batch = firestoreDb ? firestoreDb.batch() : null;
+    let unlockCount = 0;
+
+    for (const channel of CHANNELS) {
+      if (channel.isLocked) {
+        channel.isLocked = false;
+        unlockCount++;
+        if (batch) {
+          const ref = firestoreDb.collection('channels').doc(channel.id);
+          batch.update(ref, { isLocked: false });
+        }
+        // Emit lock status for each channel to update clients instantly
+        io.emit('channel:lock_status', { channelId: channel.id, isLocked: false });
+        // The channel:locked event is also listened to by the client
+        io.emit('channel:locked', { channelId: channel.id, isLocked: false, topic: channel.topic });
+      }
+    }
+
+    if (batch && unlockCount > 0) {
+      try {
+        await batch.commit();
+      } catch (e) {
+        console.warn('Firestore unlock batch commit warning:', e);
+      }
+    }
+
+    await recordAuditLog('UNLOCK_CHANNEL', req.adminUser, `🔓 Initiated Global Campus Unlock. Unlocked ${unlockCount} channels.`);
+    
+    // Clear broadcast if it's the lockdown one
+    if (activeSystemBroadcast && activeSystemBroadcast.title === 'CAMPUS LOCKDOWN') {
+      activeSystemBroadcast = null;
+      io.emit('admin:system_broadcast', null);
+    } else {
+      // Just announce it's lifted
+      const broadcast = {
+        title: 'CAMPUS UNLOCKED',
+        message: 'The campus lockdown has been lifted by administrators. All channels are now unlocked.',
+        priority: 'info',
+        timestamp: Date.now()
+      };
+      activeSystemBroadcast = broadcast;
+      io.emit('admin:system_broadcast', broadcast);
+    }
+
+    res.json({ success: true, unlockedChannels: unlockCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 12. Message Moderation: Search & List Messages
 app.get('/api/admin/messages', requireStaffAuth, (req, res) => {
   const { roomId, query, limit = 50 } = req.query;
