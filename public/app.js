@@ -552,6 +552,10 @@ function handleUserLoggedIn(userProfile, token) {
   };
   dom.myDisplayName.textContent = userProfile.displayName;
 
+  // Immediately synchronize role UI for staff/admin (Super Admin for campus owner)
+  const isOwner = userProfile.email && userProfile.email.toLowerCase() === PRIMARY_CAMPUS_OWNER_EMAIL.toLowerCase();
+  updateUserRoleUI(isOwner ? 'admin' : (userProfile.role || 'student'), false, false);
+
   // Switch Views
   dom.authView.classList.add('hidden');
   dom.chatView.classList.remove('hidden');
@@ -3999,6 +4003,30 @@ function initAdminConsoleListeners() {
   if (dom.btnOpenAdminPanel) {
     dom.btnOpenAdminPanel.addEventListener('click', () => openAdminPanel('overview'));
   }
+
+  // Profile bar role badge click trigger
+  if (dom.myRoleBadge) {
+    dom.myRoleBadge.classList.add('cursor-pointer');
+    dom.myRoleBadge.title = 'Click to open Campus Admin Console';
+    dom.myRoleBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAdminPanel('overview');
+    });
+  }
+
+  // Keyboard shortcut: Alt+A or Ctrl+Shift+A to toggle Admin Panel for staff
+  window.addEventListener('keydown', (e) => {
+    if ((e.altKey && (e.key === 'a' || e.key === 'A')) || (e.ctrlKey && e.shiftKey && (e.key === 'a' || e.key === 'A'))) {
+      if (state.userRole === 'admin' || state.userRole === 'moderator') {
+        e.preventDefault();
+        if (dom.modalAdmin && !dom.modalAdmin.classList.contains('hidden')) {
+          closeAdminPanel();
+        } else {
+          openAdminPanel('overview');
+        }
+      }
+    }
+  });
 
   // Modal Close Buttons
   if (dom.btnCloseAdminPanel) {
