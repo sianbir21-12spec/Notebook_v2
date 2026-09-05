@@ -320,6 +320,7 @@ function setAuthMode(mode) {
     dom.tabRegister.classList.add('text-slate-400');
     dom.fieldName.classList.add('hidden');
     dom.submitButtonText.textContent = 'Sign In';
+    if (dom.inputPassword) dom.inputPassword.setAttribute('autocomplete', 'current-password');
   } else {
     dom.tabRegister.classList.add('bg-indigo-600', 'text-white', 'shadow-sm');
     dom.tabRegister.classList.remove('text-slate-400');
@@ -327,6 +328,7 @@ function setAuthMode(mode) {
     dom.tabSignIn.classList.add('text-slate-400');
     dom.fieldName.classList.remove('hidden');
     dom.submitButtonText.textContent = 'Create Account';
+    if (dom.inputPassword) dom.inputPassword.setAttribute('autocomplete', 'new-password');
   }
 }
 
@@ -578,7 +580,23 @@ function connectSocket(token, userProfile) {
   state.socket.on('room:history_cleared', () => {
     state.roomCaches = {};
     state.messages = [];
+    Object.keys(state.unreadCounts).forEach(k => { state.unreadCounts[k] = 0; });
+    renderChannelsList();
     renderMessagesList([]);
+    updateDocumentTitleWithUnreads();
+  });
+
+  // Channel unread counts sync from server
+  state.socket.on('channels:unread_sync', (data) => {
+    if (data && data.unreadCounts) {
+      Object.assign(state.unreadCounts, data.unreadCounts);
+      // Currently viewed channel is always active / marked read
+      if (!state.isDirectMessage && state.currentRoom) {
+        state.unreadCounts[state.currentRoom] = 0;
+      }
+      renderChannelsList();
+      updateDocumentTitleWithUnreads();
+    }
   });
 
   // Incoming new message (with instant optimistic reconciliation)
@@ -648,10 +666,22 @@ function connectSocket(token, userProfile) {
           dm.unreadCount = (dm.unreadCount || 0) + 1;
         }
         renderDirectMessagesList();
+        updateDocumentTitleWithUnreads();
       } else {
-        // Increment unread count for school channel
-        state.unreadCounts[message.roomId] = (state.unreadCounts[message.roomId] || 0) + 1;
-        renderChannelsList();
+        // Increment unread count for school channel if sent by someone else
+        if (!state.roomCaches[message.roomId]) {
+          state.roomCaches[message.roomId] = [];
+        }
+        if (!state.roomCaches[message.roomId].some(m => m.id === message.id)) {
+          state.roomCaches[message.roomId].push(message);
+        }
+
+        const isFromMe = state.currentUser && message.sender && message.sender.uid === state.currentUser.uid;
+        if (!isFromMe) {
+          state.unreadCounts[message.roomId] = (state.unreadCounts[message.roomId] || 0) + 1;
+          renderChannelsList();
+          updateDocumentTitleWithUnreads();
+        }
       }
     }
   });
@@ -841,29 +871,75 @@ function switchChannel(channelId) {
   renderDirectMessagesList();
 }
 
+// Update browser document title dynamically based on active unreads across channels & DMs
+function updateDocumentTitleWithUnreads() {
+  const baseTitle = 'School Friend Group Chat';
+  let channelTotal = 0;
+  if (state.unreadCounts) {
+    Object.entries(state.unreadCounts).forEach(([roomId, count]) => {
+      if ((state.isDirectMessage || roomId !== state.currentRoom) && typeof count === 'number') {
+        channelTotal += count;
+      }
+    });
+  }
+
+  let dmTotal = 0;
+  if (state.activeDirectMessages) {
+    state.activeDirectMessages.forEach(dm => {
+      if (dm.unreadCount && (!state.isDirectMessage || !state.currentRoom.includes(dm.uid))) {
+        dmTotal += dm.unreadCount;
+      }
+    });
+  }
+
+  const grandTotal = channelTotal + dmTotal;
+  if (grandTotal > 0) {
+    document.title = `(${grandTotal > 99 ? '99+' : grandTotal}) ${baseTitle}`;
+  } else {
+    document.title = baseTitle;
+  }
+}
+
 function renderChannelsList() {
   dom.channelsList.innerHTML = '';
 
+  let totalUnread = 0;
+
   state.channels.forEach(channel => {
     const isActive = !state.isDirectMessage && channel.id === state.currentRoom;
-    const unread = state.unreadCounts[channel.id] || 0;
+    const unread = isActive ? 0 : (state.unreadCounts[channel.id] || 0);
+    if (!isActive) {
+      totalUnread += unread;
+    }
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = `w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition group ${
+    btn.id = `channel-btn-${channel.id}`;
+    btn.setAttribute('data-channel-id', channel.id);
+    btn.setAttribute('aria-label', `${channel.name}${unread > 0 ? `, ${unread} unread message${unread === 1 ? '' : 's'}` : ''}`);
+    btn.title = unread > 0 ? `${unread} unread message${unread === 1 ? '' : 's'} in ${channel.name}` : `${channel.name} - ${channel.topic || ''}`;
+
+    btn.className = `w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 group ${
       isActive 
-        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' 
-        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+        ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 font-semibold shadow-sm' 
+        : unread > 0
+          ? 'bg-slate-800/60 text-slate-100 font-semibold hover:bg-slate-800/90 border border-slate-700/60 shadow-sm'
+          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
     }`;
 
     btn.innerHTML = `
-      <div class="flex items-center gap-2.5 truncate">
-        <span class="${isActive ? 'text-indigo-400 font-bold' : 'text-slate-500 group-hover:text-slate-400'}">#</span>
-        <span class="truncate">${channel.name.replace('#', '')}</span>
+      <div class="flex items-center gap-2 truncate min-w-0">
+        <span class="relative flex items-center justify-center shrink-0 w-4 h-4">
+          ${unread > 0 && !isActive ? `
+            <span class="absolute -left-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+          ` : ''}
+          <span class="${isActive ? 'text-indigo-400 font-bold' : unread > 0 ? 'text-indigo-400 font-bold' : 'text-slate-500 group-hover:text-slate-400'}">#</span>
+        </span>
+        <span class="truncate ${unread > 0 && !isActive ? 'text-white font-semibold' : ''}">${channel.name.replace('#', '')}</span>
       </div>
       ${unread > 0 ? `
-        <span class="ml-2 px-1.5 py-0.5 rounded-full bg-indigo-600 text-white font-bold text-[10px] shrink-0">
-          ${unread}
+        <span id="badge-count-${channel.id}" class="channel-unread-badge ml-2 px-2 py-0.5 rounded-full bg-indigo-600 text-white font-bold text-[10px] leading-tight shrink-0 shadow-sm shadow-indigo-600/40 ring-1 ring-indigo-400/40 animate-badge-pop">
+          ${unread > 99 ? '99+' : unread}
         </span>
       ` : ''}
     `;
@@ -871,6 +947,20 @@ function renderChannelsList() {
     btn.addEventListener('click', () => switchChannel(channel.id));
     dom.channelsList.appendChild(btn);
   });
+
+  // Update Section Header Total Unread Badge
+  const totalUnreadEl = document.getElementById('channels-total-unread');
+  if (totalUnreadEl) {
+    if (totalUnread > 0) {
+      totalUnreadEl.textContent = totalUnread > 99 ? '99+' : totalUnread;
+      totalUnreadEl.classList.remove('hidden');
+      totalUnreadEl.title = `${totalUnread} total unread message${totalUnread === 1 ? '' : 's'} across channels`;
+    } else {
+      totalUnreadEl.classList.add('hidden');
+    }
+  }
+
+  updateDocumentTitleWithUnreads();
 }
 
 // --------------------------------------------------

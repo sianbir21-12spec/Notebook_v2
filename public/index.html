@@ -6,6 +6,18 @@
   <title>School Friend Group Chat</title>
   <meta name="description" content="Real-time web chat application for school friend groups with Express, Socket.IO channels, typing indicators, presence tracking, camera photo capture, customizable themes (Midnight, Ocean, Forest), and Firebase Authentication." />
   
+  <!-- Tailwind CSS Configuration & Console Advisory Handler -->
+  <script>
+    (function() {
+      const originalWarn = console.warn;
+      console.warn = function(...args) {
+        if (typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com should not be used in production')) {
+          return;
+        }
+        originalWarn.apply(console, args);
+      };
+    })();
+  </script>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -103,8 +115,29 @@
       will-change: transform, opacity;
     }
 
+    /* Dynamic badge pop animation for channel unread notifications */
+    @keyframes badge-pop {
+      0% {
+        opacity: 0;
+        transform: scale(0.6);
+      }
+      65% {
+        transform: scale(1.15);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .animate-badge-pop {
+      animation: badge-pop 0.22s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+      will-change: transform, opacity;
+    }
+
     @media (prefers-reduced-motion: reduce) {
-      .animate-slide-in-up {
+      .animate-slide-in-up,
+      .animate-badge-pop {
         animation: none !important;
         transform: none !important;
         opacity: 1 !important;
@@ -372,20 +405,20 @@
           <!-- Name Field (Visible on Register) -->
           <div id="field-name" class="hidden">
             <label for="input-name" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Full Name</label>
-            <input id="input-name" type="text" placeholder="e.g. Jordan Miller" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+            <input id="input-name" type="text" autocomplete="name" placeholder="e.g. Jordan Miller" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
           </div>
 
           <!-- Email Field -->
           <div>
             <label for="input-email" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">School Email</label>
-            <input id="input-email" type="email" required placeholder="alex@school.edu" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+            <input id="input-email" type="email" autocomplete="email" required placeholder="alex@school.edu" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
             <p id="email-error" class="hidden mt-1 text-xs text-rose-400"></p>
           </div>
 
           <!-- Password Field -->
           <div>
             <label for="input-password" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Password</label>
-            <input id="input-password" type="password" required placeholder="Min. 6 characters" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
+            <input id="input-password" type="password" autocomplete="current-password" required placeholder="Min. 6 characters" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all" />
             <p id="password-error" class="hidden mt-1 text-xs text-rose-400"></p>
           </div>
 
@@ -473,7 +506,10 @@
         <div>
           <div class="px-2 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
             <span>School Channels</span>
-            <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">5</span>
+            <div class="flex items-center gap-1.5">
+              <span id="channels-total-unread" class="hidden text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded-full font-bold shadow-sm shadow-indigo-600/40 animate-pulse">0</span>
+              <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">5</span>
+            </div>
           </div>
           <div id="channels-list" class="space-y-1">
             <!-- Dynamically populated channels -->
@@ -928,6 +964,7 @@
           <input 
             type="text" 
             id="input-profile-name" 
+            autocomplete="name"
             maxlength="50"
             placeholder="Enter your campus display name..." 
             class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
@@ -1124,6 +1161,7 @@
             <input 
               type="text" 
               id="camera-caption-input" 
+              autocomplete="off"
               placeholder="Add a caption... (optional)" 
               class="w-full py-2 px-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />

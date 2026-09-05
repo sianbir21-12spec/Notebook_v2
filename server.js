@@ -699,10 +699,31 @@ io.on('connection', async (socket) => {
   // Join personal user room for targeted notifications (e.g. direct messages)
   socket.join(`user_${uid}`);
 
+  // Join all school channels so that every online classmate receives live message broadcasts
+  // and dynamic unread badge counts for channels they are not currently viewing!
+  CHANNELS.forEach(channel => {
+    socket.join(channel.id);
+  });
+
   // Join default channel
   const defaultRoom = 'general';
-  socket.join(defaultRoom);
   socket.currentRoom = defaultRoom;
+
+  // Compute initial unread counts per channel for this connected user
+  const initialUnreads = {};
+  CHANNELS.forEach(channel => {
+    if (channel.id === defaultRoom) {
+      initialUnreads[channel.id] = 0;
+    } else {
+      const msgs = roomHistories.get(channel.id) || [];
+      const unread = msgs.filter(m => 
+        m.sender?.uid !== user.uid && 
+        (!m.seenBy || !m.seenBy.some(s => s.uid === user.uid))
+      ).length;
+      initialUnreads[channel.id] = unread;
+    }
+  });
+  socket.emit('channels:unread_sync', { unreadCounts: initialUnreads });
 
   // Fetch last 50 messages from Firestore (or memory) and send initial room history
   const initialHistory = await getRoomMessages(defaultRoom, 50);
@@ -739,17 +760,13 @@ io.on('connection', async (socket) => {
       return;
     }
 
-    // Leave old room
-    if (previousRoom) {
+    // If previous room was a private DM room, leave it
+    if (previousRoom && previousRoom.startsWith('dm_')) {
       socket.leave(previousRoom);
-      socket.to(previousRoom).emit('system:notice', {
-        roomId: previousRoom,
-        text: `${user.name} left the room`,
-        timestamp: Date.now()
-      });
     }
+    // Note: School channels remain joined so cross-channel unread badges update in real time!
 
-    // Join new room
+    // Ensure socket is in the target room
     socket.join(roomId);
     socket.currentRoom = roomId;
 
@@ -761,13 +778,6 @@ io.on('connection', async (socket) => {
     // Fetch and send last 50 messages
     const history = await getRoomMessages(roomId, 50);
     socket.emit('room:history', { roomId, messages: history });
-
-    // Notify new room members
-    socket.to(roomId).emit('system:notice', {
-      roomId,
-      text: `${user.name} entered #${roomId}`,
-      timestamp: Date.now()
-    });
 
     // Update presence so peers see user's active channel
     io.emit('users:presence', getOnlineUsersList());
@@ -781,7 +791,7 @@ io.on('connection', async (socket) => {
     const dmRoomId = getDmRoomId(uid, targetUid);
 
     const previousRoom = socket.currentRoom;
-    if (previousRoom && previousRoom !== dmRoomId) {
+    if (previousRoom && previousRoom.startsWith('dm_') && previousRoom !== dmRoomId) {
       socket.leave(previousRoom);
     }
 
