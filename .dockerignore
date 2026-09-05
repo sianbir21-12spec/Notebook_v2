@@ -1,0 +1,31 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Node dependencies and build artifacts
+node_modules
+dist
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# Secrets and local environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+serviceAccountKey.json
+
+# System and editor files
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

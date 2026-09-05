@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  campusconnect:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: campusconnect:latest
+    container_name: campusconnect-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -384,24 +384,15 @@
           </button>
         </form>
 
-        <!-- Sandbox & Quick Student Login Section -->
-        <div class="mt-6 pt-5 border-t border-slate-800/80">
-          <div class="flex items-center justify-between mb-2.5">
-            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">⚡ Instant Student Testing</span>
-            <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Ready</span>
+        <!-- Friends & Group Access Info -->
+        <div class="mt-6 pt-5 border-t border-slate-800/80 text-center">
+          <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium mb-2">
+            <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+            </svg>
+            <span>Auth-Protected Friend Group</span>
           </div>
-          <p class="text-xs text-slate-500 mb-3">Jump right in with pre-configured student test accounts:</p>
-          <div class="grid grid-cols-3 gap-2">
-            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Alex Rivera" data-email="alex@school.edu">
-              <span>🎒</span> Alex
-            </button>
-            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Maya Chen" data-email="maya@school.edu">
-              <span>🔬</span> Maya
-            </button>
-            <button type="button" class="btn-demo-login px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium text-center transition hover:text-white flex items-center justify-center gap-1" data-name="Jordan Smith" data-email="jordan@school.edu">
-              <span>🎮</span> Jordan
-            </button>
-          </div>
+          <p class="text-xs text-slate-500">Sign in with your Google or verified student account. Only authenticated members can join channels and chat.</p>
         </div>
 
         <!-- Firebase Config Setup Helper Link -->
@@ -495,17 +486,22 @@
 
       <!-- Bottom Profile Bar -->
       <div class="p-3 border-t border-slate-800/80 bg-slate-950/60">
-        <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center justify-between gap-2">
           
-          <!-- Avatar and User Info -->
-          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+          <!-- Avatar and User Info (Clickable trigger for profile editing) -->
+          <div id="btn-edit-profile-trigger" class="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer group hover:opacity-95 transition" title="Click to edit profile">
             <div class="relative flex-shrink-0">
-              <img id="my-avatar" src="https://ui-avatars.com/api/?name=Student&background=6366f1&color=fff" alt="User avatar" class="w-9 h-9 rounded-full object-cover border border-slate-700 shadow-sm" />
+              <img id="my-avatar" src="https://ui-avatars.com/api/?name=Student&background=6366f1&color=fff" alt="User avatar" class="w-9 h-9 rounded-full object-cover border border-slate-700 shadow-sm group-hover:border-indigo-500 transition" />
               <span id="my-status-indicator" class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900"></span>
             </div>
             <div class="min-w-0 flex-1">
-              <div id="my-display-name" class="text-sm font-semibold text-white truncate">Student</div>
               <div class="flex items-center gap-1.5">
+                <div id="my-display-name" class="text-sm font-semibold text-white truncate group-hover:text-indigo-300 transition">Student</div>
+                <svg class="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </div>
+              <div class="flex items-center gap-1.5" onclick="event.stopPropagation()">
                 <select id="status-selector" class="bg-transparent text-slate-400 text-xs font-medium focus:outline-none cursor-pointer hover:text-slate-200">
                   <option value="online" class="bg-slate-900 text-slate-200">🟢 Online</option>
                   <option value="studying" class="bg-slate-900 text-slate-200">📚 Studying</option>
@@ -515,12 +511,19 @@
             </div>
           </div>
 
-          <!-- Sign Out Button -->
-          <button id="btn-logout" title="Sign Out" class="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition flex-shrink-0">
-            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </button>
+          <!-- Action Buttons: Edit Profile and Sign Out -->
+          <div class="flex items-center gap-0.5 flex-shrink-0">
+            <button id="btn-open-edit-profile" title="Edit Profile & Avatar" class="p-2 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button id="btn-logout" title="Sign Out" class="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          </div>
 
         </div>
       </div>
@@ -831,14 +834,153 @@
         </div>
 
         <div class="p-3 bg-indigo-950/40 rounded-xl border border-indigo-800/40 text-indigo-200">
-          <span class="font-semibold text-white">⚡ Dual Mode Support:</span>
-          You can sign in with your Google account, create new student accounts with email/password, or use the one-click demo student profiles for instant testing.
+          <span class="font-semibold text-white">🔒 Secure Authentication:</span>
+          Sign in with your Google account or verified student credentials. Every authenticated friend who logs in joins your shared campus channels.
         </div>
       </div>
 
       <div class="pt-2 flex justify-end">
         <button id="btn-modal-dismiss" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-xl transition cursor-pointer">
           Done
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======================================================= -->
+  <!-- 3B. USER PROFILE EDITING MODAL                          -->
+  <!-- ======================================================= -->
+  <div id="modal-profile" class="hidden fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+    <div class="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5 my-auto">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3.5">
+        <div class="flex items-center gap-2.5 text-white font-bold text-base">
+          <div class="w-8 h-8 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+          </div>
+          <div>
+            <div class="text-sm sm:text-base font-semibold text-white">Edit Your Profile</div>
+            <div class="text-xs text-slate-400 font-normal">Update your display name and campus avatar</div>
+          </div>
+        </div>
+        <button id="btn-close-profile" type="button" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Live Profile Preview Card -->
+      <div class="p-3.5 bg-slate-950/80 rounded-xl border border-slate-800/80 flex items-center gap-3.5">
+        <div class="relative flex-shrink-0">
+          <img id="profile-preview-avatar" src="https://ui-avatars.com/api/?name=Student&background=6366f1&color=fff" alt="Avatar preview" class="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-md" />
+          <span class="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-2 ring-slate-900"></span>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <span id="profile-preview-name" class="font-bold text-white text-base truncate">Student</span>
+            <span class="px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Live Preview</span>
+          </div>
+          <div id="profile-preview-email" class="text-xs text-slate-400 truncate mt-0.5">student@campus.edu</div>
+          <div class="text-[11px] text-emerald-400 flex items-center gap-1 mt-1 font-medium">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
+            Real-time sync to all classmates
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: Display Name -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+          <label for="input-profile-name" class="text-xs font-semibold text-slate-300">Display Name</label>
+          <span id="profile-name-count" class="text-[11px] text-slate-500">0/50</span>
+        </div>
+        <div class="relative">
+          <input 
+            type="text" 
+            id="input-profile-name" 
+            maxlength="50"
+            placeholder="Enter your campus display name..." 
+            class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+          />
+        </div>
+        <p class="text-[11px] text-slate-400">Shown next to your messages in public channels, study groups, and direct chats.</p>
+      </div>
+
+      <!-- Section: Avatar Selection -->
+      <div class="space-y-2.5">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300">Choose Profile Avatar</label>
+          <button id="btn-profile-use-fallback" type="button" class="text-[11px] text-indigo-400 hover:text-indigo-300 hover:underline flex items-center gap-1 font-medium transition cursor-pointer">
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset to UI-Avatars Fallback
+          </button>
+        </div>
+
+        <!-- Predefined Avatars Grid (8 campus archetypes) -->
+        <div class="space-y-1.5">
+          <div class="text-[11px] text-slate-400 font-medium">Predefined Campus Avatars:</div>
+          <div id="profile-preset-avatars-grid" class="grid grid-cols-4 sm:grid-cols-8 gap-2">
+            <!-- Dynamically populated or rendered presets -->
+          </div>
+        </div>
+
+        <!-- Custom Photo Upload Dropzone -->
+        <div class="space-y-1.5 pt-1">
+          <div class="text-[11px] text-slate-400 font-medium">Or Upload Custom Profile Photo:</div>
+          <div 
+            id="profile-dropzone" 
+            class="border-2 border-dashed border-slate-700 hover:border-indigo-500/80 rounded-xl p-3 sm:p-4 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition group"
+          >
+            <input type="file" id="input-profile-file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden" />
+            <div class="flex flex-col items-center justify-center gap-1.5">
+              <div class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 group-hover:text-indigo-400 flex items-center justify-center transition">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div class="text-xs text-slate-300 font-medium group-hover:text-indigo-300 transition">
+                <span class="text-indigo-400 underline">Click to upload photo</span> or drag & drop
+              </div>
+              <div class="text-[10px] text-slate-500">
+                Supports PNG, JPG, or WebP (auto-optimized and cropped square)
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Status / Feedback Message -->
+      <div id="profile-feedback" class="hidden p-2.5 rounded-xl text-xs font-medium border flex items-center gap-2">
+        <span id="profile-feedback-text">Profile updated</span>
+      </div>
+
+      <!-- Modal Footer Action Buttons -->
+      <div class="pt-2 flex items-center justify-end gap-2.5 border-t border-slate-800">
+        <button 
+          id="btn-cancel-profile" 
+          type="button" 
+          class="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button 
+          id="btn-save-profile" 
+          type="button" 
+          class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-md hover:shadow-indigo-500/25 transition cursor-pointer flex items-center gap-1.5"
+        >
+          <svg id="profile-save-spinner" class="hidden w-3.5 h-3.5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <span id="profile-save-btn-text">Save Profile</span>
         </button>
       </div>
 

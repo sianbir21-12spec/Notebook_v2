@@ -11,8 +11,9 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 dotenv.config();
 
@@ -23,18 +24,47 @@ const app = express();
 const server = createServer(app);
 const PORT = process.env.PORT || 3000;
 
+// Production-grade security headers & response optimization
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 // Enable CORS for development and cross-origin requests
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
-// Serve static frontend files from 'public' directory
-const publicDir = path.join(process.cwd(), 'public');
-app.use(express.static(publicDir));
+// In-Memory Socket Rate Limiter (prevents socket flooding and DoS)
+const socketRateLimits = new Map();
+
+function isRateLimited(socketId, maxEvents = 15, windowMs = 3000) {
+  const now = Date.now();
+  if (!socketRateLimits.has(socketId)) {
+    socketRateLimits.set(socketId, { count: 1, resetTime: now + windowMs });
+    return false;
+  }
+  const entry = socketRateLimits.get(socketId);
+  if (now > entry.resetTime) {
+    entry.count = 1;
+    entry.resetTime = now + windowMs;
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > maxEvents;
+}
+
+// Serve static frontend files (CampusConnect client in 'public')
+const staticDir = path.join(process.cwd(), 'public');
+app.use(express.static(staticDir));
 
 // ==========================================
 // 1. FIREBASE ADMIN & FIRESTORE INITIALIZATION
 // ==========================================
 let isFirebaseAdminReady = false;
+let adminAuth = null;
 let firestoreDb = null;
 let firebaseAppletConfig = null;
 
@@ -53,10 +83,11 @@ try {
   if (fs.existsSync(serviceAccountPath)) {
     const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
     if (serviceAccount.project_id && !serviceAccount.project_id.includes('YOUR_')) {
-      const adminApp = admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
+      const adminApp = initializeApp({
+        credential: cert(serviceAccount),
         projectId: serviceAccount.project_id
       });
+      adminAuth = getAuth(adminApp);
       isFirebaseAdminReady = true;
       try {
         const dbId = firebaseAppletConfig?.firestoreDatabaseId;
@@ -68,20 +99,16 @@ try {
     }
   }
 
-  if (!isFirebaseAdminReady && firebaseAppletConfig && firebaseAppletConfig.projectId) {
-    const adminApp = admin.initializeApp({
+  if (!adminAuth && firebaseAppletConfig && firebaseAppletConfig.projectId) {
+    const adminApp = initializeApp({
       projectId: firebaseAppletConfig.projectId
     });
+    adminAuth = getAuth(adminApp);
     isFirebaseAdminReady = true;
-    try {
-      const dbId = firebaseAppletConfig.firestoreDatabaseId;
-      firestoreDb = dbId ? getFirestore(adminApp, dbId) : getFirestore(adminApp);
-      console.log(`✅ [Firebase Admin] Initialized with firebase-applet-config.json (Project: ${firebaseAppletConfig.projectId}, dbId: ${dbId || 'default'}).`);
-    } catch (fsErr) {
-      console.warn('⚠️ [Firebase Admin] Firestore initialization error:', fsErr.message);
-    }
-  } else if (!isFirebaseAdminReady && (process.env.FIREBASE_CONFIG || process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
-    const adminApp = admin.initializeApp();
+    console.log(`✅ [Firebase Auth] Initialized for token verification (Project: ${firebaseAppletConfig.projectId}).`);
+  } else if (!adminAuth && (process.env.FIREBASE_CONFIG || process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+    const adminApp = initializeApp();
+    adminAuth = getAuth(adminApp);
     isFirebaseAdminReady = true;
     try {
       firestoreDb = getFirestore(adminApp);
@@ -91,58 +118,48 @@ try {
     }
   }
 
-  if (!isFirebaseAdminReady) {
-    console.warn('⚠️ [Firebase Admin] No Firebase credentials found. Running in Dev/Demo token mode.');
+  if (!adminAuth) {
+    console.warn('⚠️ [Firebase Admin] No Firebase configuration found. Running in Dev/Demo token mode.');
   }
 } catch (err) {
   console.error('❌ [Firebase Admin] Error initializing Admin SDK:', err.message);
   console.warn('⚠️ Falling back to Dev/Demo token mode so the app remains fully usable.');
 }
 
-// Helper to verify Firebase ID Token or decode Dev Token
+// Graceful Firestore error helper (catches permissions/unavailable errors and safely reverts to in-memory state)
+function handleFirestoreError(err, context = '') {
+  if (err?.code === 7 || err?.message?.includes('PERMISSION_DENIED') || err?.message?.includes('insufficient permissions')) {
+    if (firestoreDb) {
+      console.info('ℹ️ [Firestore] Service account credentials not present or lack IAM permissions; using robust in-memory state.');
+      firestoreDb = null;
+    }
+  } else {
+    console.warn(`⚠️ [Firestore] ${context} error:`, err?.message || err);
+  }
+}
+
+// Helper to verify Firebase ID Token (Auth-only protection for you and your friends)
 async function verifyAuthToken(token, clientUser = null) {
   if (!token) throw new Error('Authentication token is required');
 
-  // If real Firebase Admin is initialized and token is not a demo token
-  if (isFirebaseAdminReady && !token.startsWith('demo-token-')) {
+  // Verify genuine Firebase ID Token with Firebase Admin SDK
+  if (adminAuth) {
     try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
+      const decodedToken = await adminAuth.verifyIdToken(token);
       return {
         uid: decodedToken.uid,
         email: decodedToken.email || '',
-        name: decodedToken.name || decodedToken.email?.split('@')[0] || 'Student',
-        picture: decodedToken.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(decodedToken.name || 'Student')}&background=3b82f6&color=fff`,
-        authType: 'firebase-admin'
+        name: decodedToken.name || decodedToken.email?.split('@')[0] || 'Friend',
+        picture: decodedToken.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(decodedToken.name || 'Friend')}&background=4f46e5&color=fff`,
+        authType: 'firebase-auth'
       };
     } catch (err) {
       console.warn('Token verification error against Firebase Admin:', err.message);
-      // If verification fails but client sent user details in dev mode
-      if (process.env.NODE_ENV !== 'production' && clientUser && clientUser.uid) {
-        return {
-          uid: clientUser.uid,
-          email: clientUser.email || '',
-          name: clientUser.name || 'Student',
-          picture: clientUser.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(clientUser.name || 'Student')}&background=3b82f6&color=fff`,
-          authType: 'dev-fallback'
-        };
-      }
       throw new Error(`Firebase token verification failed: ${err.message}`);
     }
   }
 
-  // Dev / Demo Token handling (allows instant testing in sandbox/preview)
-  if (token.startsWith('demo-token-') || !isFirebaseAdminReady) {
-    const fallbackName = clientUser?.name || 'Student';
-    return {
-      uid: clientUser?.uid || `demo_${Math.random().toString(36).substring(2, 9)}`,
-      email: clientUser?.email || 'student@school.edu',
-      name: fallbackName,
-      picture: clientUser?.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=3b82f6&color=fff`,
-      authType: 'demo-sandbox'
-    };
-  }
-
-  throw new Error('Unauthorized');
+  throw new Error('Firebase Authentication is not ready. Please verify Firebase project configuration.');
 }
 
 // ==========================================
@@ -183,8 +200,13 @@ const CHANNELS = [
   }
 ];
 
-// In-Memory message histories per room (stores last 100 messages)
+// In-Memory message histories per room (pristine & clean - memory cleared for you and your friends)
 const roomHistories = new Map();
+
+// Initialize clean, empty histories for all channels
+CHANNELS.forEach(channel => {
+  roomHistories.set(channel.id, []);
+});
 
 // Helper to format timestamp into 12-hour AM/PM
 function formatTimestamp(timestamp = Date.now()) {
@@ -192,99 +214,28 @@ function formatTimestamp(timestamp = Date.now()) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Seed initial messages for school channels so it feels alive
-function seedChannelHistories() {
-  const now = Date.now();
-  
-  roomHistories.set('general', [
-    {
-      id: 'msg_seed_1',
-      roomId: 'general',
-      sender: {
-        uid: 'sys_alex',
-        name: 'Alex Rivera',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-        email: 'alex@school.edu'
-      },
-      content: 'Hey everyone! Welcome to our school group chat hub! 🎒📚 *Check out* the new channels.',
-      timestamp: now - 3600000,
-      formattedTime: formatTimestamp(now - 3600000),
-      reactions: { '👍': ['sys_maya'] },
-      seenBy: [{ uid: 'sys_maya', name: 'Maya Chen', seenAt: now - 3500000 }]
-    },
-    {
-      id: 'msg_seed_2',
-      roomId: 'general',
-      sender: {
-        uid: 'sys_maya',
-        name: 'Maya Chen',
-        avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
-        email: 'maya@school.edu'
-      },
-      content: 'Loving the clean layout! Try sending `code blocks` or _italics_! 🚀',
-      timestamp: now - 1800000,
-      formattedTime: formatTimestamp(now - 1800000),
-      reactions: { '🔥': ['sys_alex'], '❤️': ['sys_jordan'] },
-      seenBy: [{ uid: 'sys_alex', name: 'Alex Rivera', seenAt: now - 1700000 }]
+// Clean up any legacy test documents from Firestore if present
+async function clearTestFirestoreMessages() {
+  if (!firestoreDb) return;
+  try {
+    const seedDocs = ['msg_seed_1', 'msg_seed_2', 'msg_seed_3', 'msg_seed_4', 'msg_seed_5'];
+    for (const id of seedDocs) {
+      try {
+        await firestoreDb.collection('messages').doc(id).delete();
+      } catch (e) {}
     }
-  ]);
-
-  roomHistories.set('homework-help', [
-    {
-      id: 'msg_seed_3',
-      roomId: 'homework-help',
-      sender: {
-        uid: 'sys_jordan',
-        name: 'Jordan Smith',
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80',
-        email: 'jordan@school.edu'
-      },
-      content: 'Anyone working on Calculus Problem Set #4? Specifically question 3 on derivatives?',
-      timestamp: now - 1200000,
-      formattedTime: formatTimestamp(now - 1200000),
-      reactions: { '🤔': ['sys_maya'] },
-      seenBy: [{ uid: 'sys_maya', name: 'Maya Chen', seenAt: now - 1100000 }]
-    },
-    {
-      id: 'msg_seed_4',
-      roomId: 'homework-help',
-      sender: {
-        uid: 'sys_maya',
-        name: 'Maya Chen',
-        avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
-        email: 'maya@school.edu'
-      },
-      content: 'Yes! You have to apply the quotient rule first, then factor out the polynomial.',
-      timestamp: now - 600000,
-      formattedTime: formatTimestamp(now - 600000),
-      reactions: { '💡': ['sys_jordan'], '🙌': ['sys_jordan'] },
-      seenBy: [{ uid: 'sys_jordan', name: 'Jordan Smith', seenAt: now - 500000 }]
+    const testUids = ['sys_alex', 'sys_maya', 'sys_jordan'];
+    for (const uid of testUids) {
+      try {
+        await firestoreDb.collection('users').doc(uid).delete();
+      } catch (e) {}
     }
-  ]);
-
-  roomHistories.set('gaming', [
-    {
-      id: 'msg_seed_5',
-      roomId: 'gaming',
-      sender: {
-        uid: 'sys_alex',
-        name: 'Alex Rivera',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-        email: 'alex@school.edu'
-      },
-      content: 'Who is down for some custom lobbies tonight around 8 PM? 🎮🔥',
-      timestamp: now - 900000,
-      formattedTime: formatTimestamp(now - 900000),
-      reactions: { '🎮': ['sys_jordan'] },
-      seenBy: []
-    }
-  ]);
-
-  roomHistories.set('hangouts', []);
-  roomHistories.set('events', []);
+    console.log('🧹 [Firestore] Cleared any test/seed documents from database.');
+  } catch (err) {
+    console.warn('⚠️ Could not clear test Firestore messages:', err.message);
+  }
 }
-
-seedChannelHistories();
+clearTestFirestoreMessages();
 
 // Helper to compute deterministic Direct Message Room ID for two users
 function getDmRoomId(uid1, uid2) {
@@ -295,40 +246,45 @@ function getDmRoomId(uid1, uid2) {
 // FIRESTORE & IN-MEMORY MESSAGE HELPERS
 // ==========================================
 
-// Save a new message to Firestore and in-memory cache
-async function saveMessage(messageObj) {
+// Save a new message to in-memory cache synchronously (0ms latency lookup)
+function saveMessageToMemory(messageObj) {
   const { roomId } = messageObj;
-
-  // 1. Maintain in-memory cache
   if (!roomHistories.has(roomId)) {
     roomHistories.set(roomId, []);
   }
   const history = roomHistories.get(roomId);
   history.push(messageObj);
-  if (history.length > 100) {
+  // Cap at 150 items to keep memory strictly bounded and prevent leaks
+  if (history.length > 150) {
     history.shift();
   }
+}
 
-  // 2. Persist in Firestore if available
-  if (firestoreDb) {
-    try {
-      await firestoreDb.collection('messages').doc(messageObj.id).set({
-        id: messageObj.id,
-        roomId: messageObj.roomId,
-        content: messageObj.content || '',
-        image: messageObj.image || null,
-        sender: messageObj.sender,
-        timestamp: messageObj.timestamp,
-        formattedTime: messageObj.formattedTime,
-        reactions: messageObj.reactions || {},
-        seenBy: messageObj.seenBy || [],
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      console.log(`💾 [Firestore] Saved message ${messageObj.id} to Firestore collection 'messages' for room ${roomId}`);
-    } catch (fsErr) {
-      console.warn(`⚠️ [Firestore] Failed to persist message ${messageObj.id} to Firestore:`, fsErr.message);
-    }
+// Persist message asynchronously to Firestore in the background (non-blocking)
+async function saveMessageToFirestore(messageObj) {
+  if (!firestoreDb) return;
+  try {
+    await firestoreDb.collection('messages').doc(messageObj.id).set({
+      id: messageObj.id,
+      roomId: messageObj.roomId,
+      content: messageObj.content || '',
+      image: messageObj.image || null,
+      sender: messageObj.sender,
+      timestamp: messageObj.timestamp,
+      formattedTime: messageObj.formattedTime,
+      reactions: messageObj.reactions || {},
+      seenBy: messageObj.seenBy || [],
+      createdAt: FieldValue.serverTimestamp()
+    });
+  } catch (fsErr) {
+    handleFirestoreError(fsErr, `Failed to persist message ${messageObj.id}`);
   }
+}
+
+// Combined helper for backward compatibility
+async function saveMessage(messageObj) {
+  saveMessageToMemory(messageObj);
+  return saveMessageToFirestore(messageObj);
 }
 
 // Fetch the last 50 messages for a room or DM from Firestore (or fallback to memory)
@@ -353,7 +309,7 @@ async function getRoomMessages(roomId, limit = 50) {
         return msgs;
       }
     } catch (fsErr) {
-      console.warn(`⚠️ [Firestore] Message history fetch for ${roomId} failed, falling back to local memory:`, fsErr.message);
+      handleFirestoreError(fsErr, `Message history fetch for ${roomId}`);
     }
   }
 
@@ -390,14 +346,14 @@ async function updateMessageReactions(roomId, messageId, emoji, uid) {
         reactions: msg.reactions
       });
     } catch (fsErr) {
-      console.warn(`⚠️ [Firestore] Error updating reactions for ${messageId}:`, fsErr.message);
+      handleFirestoreError(fsErr, `Error updating reactions for ${messageId}`);
     }
   }
 
   return msg.reactions;
 }
 
-// Mark messages as seen by user (read receipts)
+// Mark messages as seen by user (read receipts tied to individual messages)
 async function markMessagesAsSeen(roomId, messageIds, user) {
   const history = roomHistories.get(roomId) || [];
   const updatedList = [];
@@ -414,20 +370,79 @@ async function markMessagesAsSeen(roomId, messageIds, user) {
       const seenEntry = {
         uid: user.uid,
         name: user.name,
+        picture: user.picture || null,
         seenAt: now
       };
       msg.seenBy.push(seenEntry);
-      updatedList.push({ id: msg.id, seenBy: msg.seenBy });
+      updatedList.push({
+        id: msg.id,
+        messageId: msg.id,
+        roomId,
+        seenBy: msg.seenBy,
+        senderUid: msg.sender?.uid,
+        readBy: seenEntry
+      });
 
       if (firestoreDb) {
         firestoreDb.collection('messages').doc(msg.id).update({
           seenBy: msg.seenBy
-        }).catch(e => console.warn('Firestore seenBy update error:', e.message));
+        }).catch(e => handleFirestoreError(e, 'seenBy update'));
       }
     }
   }
 
   return updatedList;
+}
+
+// Map<uid, { uid, name, picture, email, updatedAt }>
+const savedProfiles = new Map();
+
+// Helper to save and sync user profile in memory and Firestore
+async function saveUserProfile(uid, profileData) {
+  const existing = savedProfiles.get(uid) || {};
+  const updated = {
+    ...existing,
+    ...profileData,
+    uid,
+    updatedAt: Date.now()
+  };
+  savedProfiles.set(uid, updated);
+
+  // Update in activeUsers presence map if user is currently connected
+  const activeUser = activeUsers.get(uid);
+  if (activeUser) {
+    if (updated.name) activeUser.name = updated.name;
+    if (updated.picture !== undefined) activeUser.picture = updated.picture;
+  }
+
+  // Update sender avatar and name in cached room histories
+  for (const [roomId, history] of roomHistories.entries()) {
+    for (const m of history) {
+      if (m.sender && m.sender.uid === uid) {
+        if (updated.name) m.sender.name = updated.name;
+        if (updated.picture !== undefined) m.sender.avatar = updated.picture;
+      }
+    }
+  }
+
+  // Persist to Firestore /users/{uid}
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('users').doc(uid).set({
+        uid,
+        name: updated.name,
+        picture: updated.picture || null,
+        email: updated.email || activeUser?.email || '',
+        status: activeUser?.status || 'online',
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      console.log(`💾 [Firestore] Saved user profile for ${uid} (${updated.name})`);
+    } catch (fsErr) {
+      handleFirestoreError(fsErr, `User profile update for ${uid}`);
+    }
+  }
+
+  return updated;
 }
 
 // Active Users Presence Map: Map<uid, UserProfile>
@@ -492,6 +507,106 @@ app.get('/api/channels', (req, res) => {
   });
 });
 
+// Profile Update Endpoint
+app.post('/api/profile', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const clientUser = req.body.clientUser || null;
+    const verifiedUser = await verifyAuthToken(token, clientUser);
+
+    const { name, picture } = req.body;
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    if (!trimmedName || trimmedName.length < 2 || trimmedName.length > 80) {
+      return res.status(400).json({ error: 'Display name must be between 2 and 80 characters' });
+    }
+
+    const cleanedPicture = (typeof picture === 'string' && picture.trim().length > 0)
+      ? picture.trim()
+      : null;
+
+    const updatedProfile = await saveUserProfile(verifiedUser.uid, {
+      name: trimmedName,
+      picture: cleanedPicture,
+      email: verifiedUser.email
+    });
+
+    // Real-time broadcast to all connected clients
+    io.emit('user:profile_updated', {
+      uid: verifiedUser.uid,
+      name: trimmedName,
+      picture: cleanedPicture,
+      updatedAt: Date.now()
+    });
+
+    // Broadcast updated presence
+    io.emit('users:presence', getOnlineUsersList());
+
+    res.json({
+      success: true,
+      profile: updatedProfile
+    });
+  } catch (err) {
+    console.error('Profile update error:', err);
+    res.status(500).json({ error: err.message || 'Failed to update profile' });
+  }
+});
+
+// Profile Fetch Endpoint
+app.get('/api/profile/:uid', async (req, res) => {
+  const targetUid = req.params.uid;
+  if (!targetUid) return res.status(400).json({ error: 'UID required' });
+
+  if (savedProfiles.has(targetUid)) {
+    return res.json(savedProfiles.get(targetUid));
+  }
+
+  if (firestoreDb) {
+    try {
+      const doc = await firestoreDb.collection('users').doc(targetUid).get();
+      if (doc.exists) {
+        return res.json(doc.data());
+      }
+    } catch (e) {
+      handleFirestoreError(e, `Fetch profile for ${targetUid}`);
+    }
+  }
+
+  const active = activeUsers.get(targetUid);
+  if (active) {
+    return res.json({
+      uid: active.uid,
+      name: active.name,
+      picture: active.picture,
+      email: active.email,
+      status: active.status
+    });
+  }
+
+  res.status(404).json({ error: 'Profile not found' });
+});
+
+// Clear All Memory Endpoint
+app.post('/api/clear-memory', async (req, res) => {
+  try {
+    CHANNELS.forEach(channel => {
+      roomHistories.set(channel.id, []);
+    });
+    // Remove all direct message histories from memory
+    for (const key of Array.from(roomHistories.keys())) {
+      if (key.startsWith('dm_')) {
+        roomHistories.delete(key);
+      }
+    }
+    // Also trigger Firestore test message cleanup
+    await clearTestFirestoreMessages();
+    io.emit('room:history_cleared', { timestamp: Date.now() });
+    res.json({ success: true, message: 'All in-memory histories cleared successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 4. SOCKET.IO SETUP & AUTHENTICATION
 // ==========================================
@@ -500,9 +615,13 @@ const io = new Server(server, {
     origin: '*',
     methods: ['GET', 'POST']
   },
+  transports: ['websocket', 'polling'], // Prefer direct WebSockets for zero latency
+  perMessageDeflate: {
+    threshold: 1024 // Compress payloads over 1KB for faster network transfer
+  },
   maxHttpBufferSize: 5e6, // 5MB buffer for photo and media transfers
-  pingTimeout: 30000,
-  pingInterval: 25000
+  pingTimeout: 20000,
+  pingInterval: 10000
 });
 
 // Authentication Middleware on Socket.IO Handshake
@@ -532,6 +651,25 @@ io.on('connection', async (socket) => {
 
   console.log(`🔌 [Socket Connected] ${user.name} (${uid}) connected on socket ${socket.id}`);
 
+  // Check if there is a saved custom profile in memory or Firestore
+  if (savedProfiles.has(uid)) {
+    const saved = savedProfiles.get(uid);
+    if (saved.name) user.name = saved.name;
+    if (saved.picture !== undefined) user.picture = saved.picture;
+  } else if (firestoreDb) {
+    try {
+      const userDoc = await firestoreDb.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        const data = userDoc.data();
+        if (data.name) user.name = data.name;
+        if (data.picture !== undefined) user.picture = data.picture;
+        savedProfiles.set(uid, { uid, name: user.name, picture: user.picture, email: user.email });
+      }
+    } catch (e) {
+      handleFirestoreError(e, 'Fetch user profile on connect');
+    }
+  }
+
   // Register in active users map
   if (!activeUsers.has(uid)) {
     activeUsers.set(uid, {
@@ -550,6 +688,13 @@ io.on('connection', async (socket) => {
     existing.name = user.name || existing.name;
     existing.picture = user.picture || existing.picture;
   }
+
+  // Sync profile data back to client in case they have a stored profile
+  socket.emit('user:profile_sync', {
+    uid: user.uid,
+    name: user.name,
+    picture: user.picture
+  });
 
   // Join personal user room for targeted notifications (e.g. direct messages)
   socket.join(`user_${uid}`);
@@ -674,7 +819,17 @@ io.on('connection', async (socket) => {
   // EVENT: message:send
   // ------------------------------------------
   socket.on('message:send', async (data) => {
-    const { roomId, content, image } = data || {};
+    // Rate limit check: max 12 messages per 4 seconds per socket
+    if (isRateLimited(socket.id, 12, 4000)) {
+      socket.emit('system:notice', {
+        roomId: data?.roomId || 'general',
+        text: '⚠️ You are sending messages too quickly. Please wait a moment.',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    const { roomId, content, image, clientTempId } = data || {};
     if (!roomId) return;
 
     const trimmedContent = (typeof content === 'string') ? content.trim() : '';
@@ -686,6 +841,7 @@ io.on('connection', async (socket) => {
 
     const messageObj = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      clientTempId: clientTempId || null,
       roomId,
       sender: {
         uid: user.uid,
@@ -701,13 +857,13 @@ io.on('connection', async (socket) => {
       seenBy: []
     };
 
-    // Save to Firestore and local cache
-    await saveMessage(messageObj);
+    // 1. Maintain in-memory cache synchronously (0ms lookup)
+    saveMessageToMemory(messageObj);
 
-    // Broadcast message to everyone in the room (including sender)
+    // 2. Broadcast immediately with zero latency to all clients in the room!
     io.to(roomId).emit('message:receive', messageObj);
 
-    // If this is a direct message, notify the recipient outside their active view
+    // 3. If this is a direct message, notify the recipient outside their active view
     if (roomId.startsWith('dm_')) {
       const uids = roomId.replace('dm_', '').split('_');
       const recipientUid = uids.find(id => id !== user.uid);
@@ -724,6 +880,11 @@ io.on('connection', async (socket) => {
         });
       }
     }
+
+    // 4. Asynchronously persist to Firestore in the background (non-blocking)
+    saveMessageToFirestore(messageObj).catch(err => {
+      handleFirestoreError(err, `Async Firestore save message ${messageObj.id}`);
+    });
   });
 
   // ------------------------------------------
@@ -731,6 +892,9 @@ io.on('connection', async (socket) => {
   // ------------------------------------------
   socket.on('message:react', async ({ roomId, messageId, emoji }) => {
     if (!roomId || !messageId || !emoji) return;
+
+    // Rate limit reaction toggles: max 25 per 3 seconds
+    if (isRateLimited(`react_${socket.id}`, 25, 3000)) return;
 
     const updatedReactions = await updateMessageReactions(roomId, messageId, emoji, user.uid);
     if (updatedReactions !== null) {
@@ -743,17 +907,90 @@ io.on('connection', async (socket) => {
   });
 
   // ------------------------------------------
-  // EVENT: message:read (Read Receipts)
+  // EVENT: message:read (Read Receipts tied to individual messages)
   // ------------------------------------------
-  socket.on('message:read', async ({ roomId, messageIds }) => {
-    if (!roomId || !Array.isArray(messageIds) || messageIds.length === 0) return;
+  socket.on('message:read', async (data) => {
+    const { roomId, messageId, messageIds } = data || {};
+    if (!roomId) return;
+    const targetIds = Array.isArray(messageIds)
+      ? messageIds
+      : (messageId ? [messageId] : []);
+    if (targetIds.length === 0) return;
 
-    const seenUpdates = await markMessagesAsSeen(roomId, messageIds, user);
+    const seenUpdates = await markMessagesAsSeen(roomId, targetIds, user);
     if (seenUpdates.length > 0) {
+      // 1. Broadcast seen_update to room
       io.to(roomId).emit('message:seen_update', {
         roomId,
         seenUpdates
       });
+
+      // 2. Broadcast individual message:read events to sender and room
+      seenUpdates.forEach(update => {
+        const payload = {
+          roomId,
+          messageId: update.messageId,
+          seenBy: update.seenBy,
+          readBy: update.readBy
+        };
+
+        // Broadcast to chat room
+        io.to(roomId).emit('message:read', payload);
+
+        // Direct emission to the message sender's personal room
+        if (update.senderUid && update.senderUid !== user.uid) {
+          io.to(`user_${update.senderUid}`).emit('message:read', payload);
+        }
+      });
+    }
+  });
+
+  // ------------------------------------------
+  // EVENT: profile:update (Real-time Profile Editing)
+  // ------------------------------------------
+  socket.on('profile:update', async (data) => {
+    try {
+      const { name, picture } = data || {};
+      const trimmedName = typeof name === 'string' ? name.trim() : '';
+      if (!trimmedName || trimmedName.length < 2 || trimmedName.length > 80) {
+        socket.emit('profile:update_error', { message: 'Display name must be between 2 and 80 characters' });
+        return;
+      }
+
+      const cleanedPicture = (typeof picture === 'string' && picture.trim().length > 0)
+        ? picture.trim()
+        : null;
+
+      // Update socket user state
+      user.name = trimmedName;
+      user.picture = cleanedPicture;
+
+      const updatedProfile = await saveUserProfile(uid, {
+        name: trimmedName,
+        picture: cleanedPicture,
+        email: user.email
+      });
+
+      // Notify caller of success
+      socket.emit('profile:update_success', {
+        uid,
+        name: trimmedName,
+        picture: cleanedPicture
+      });
+
+      // Broadcast update to ALL connected clients in real-time
+      io.emit('user:profile_updated', {
+        uid,
+        name: trimmedName,
+        picture: cleanedPicture,
+        updatedAt: Date.now()
+      });
+
+      // Broadcast updated presence list
+      io.emit('users:presence', getOnlineUsersList());
+    } catch (err) {
+      console.error('Socket profile update error:', err);
+      socket.emit('profile:update_error', { message: err.message || 'Failed to update profile' });
     }
   });
 
@@ -798,6 +1035,10 @@ io.on('connection', async (socket) => {
   // EVENT: disconnect
   // ------------------------------------------
   socket.on('disconnect', () => {
+    // Clean up rate limits for disconnected socket
+    socketRateLimits.delete(socket.id);
+    socketRateLimits.delete(`react_${socket.id}`);
+
     console.log(`🔌 [Socket Disconnected] ${user.name} on socket ${socket.id}`);
     const userProfile = activeUsers.get(uid);
     if (userProfile) {
@@ -822,7 +1063,7 @@ io.on('connection', async (socket) => {
 
 // Fallback to index.html for SPA client navigation
 app.get('*', (req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
+  res.sendFile(path.join(staticDir, 'index.html'));
 });
 
 // Start Server
@@ -832,4 +1073,29 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 URL: http://localhost:${PORT}`);
   console.log(`🔥 Firebase Admin Ready: ${isFirebaseAdminReady}`);
   console.log(`====================================================`);
+});
+
+// Production-grade process lifecycle and error handling
+function handleGracefulShutdown(signal) {
+  console.log(`🛑 [Process] Received ${signal}. Draining connections and shutting down...`);
+  server.close(() => {
+    console.log('✅ [Process] HTTP and WebSocket connections closed cleanly.');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('⚠️ [Process] Forcefully terminating after timeout.');
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ [Server Uncaught Exception]:', err.message, err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ [Server Unhandled Rejection]:', reason);
 });

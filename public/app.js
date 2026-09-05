@@ -64,7 +64,18 @@ const state = {
   capturedSnapshot: null,   // Freeze frame in camera modal
 
   // Color Theme State
-  currentTheme: localStorage.getItem('campusconnect_theme') || 'midnight'
+  currentTheme: localStorage.getItem('campusconnect_theme') || 'midnight',
+
+  // Room History Cache for 0ms channel transitions and instant rendering
+  roomCaches: {},
+
+  // Profile Edit State
+  profileEdit: {
+    stagedName: '',
+    stagedPicture: null,
+    selectedPresetId: null,
+    isSaving: false
+  }
 };
 
 // DOM Element references
@@ -86,7 +97,6 @@ const dom = {
   authErrorAlert: document.getElementById('auth-error-alert'),
   authErrorText: document.getElementById('auth-error-text'),
   btnGoogleAuth: document.getElementById('btn-google-auth'),
-  demoLoginButtons: document.querySelectorAll('.btn-demo-login'),
   
   // Chat Workspace Elements
   serverDot: document.getElementById('server-connection-dot'),
@@ -98,12 +108,31 @@ const dom = {
   onlineUsersList: document.getElementById('online-users-list'),
   onlineUsersCount: document.getElementById('online-users-count'),
   
-  // Profile bar
+  // Profile bar & Edit Profile Modal
   myAvatar: document.getElementById('my-avatar'),
   myDisplayName: document.getElementById('my-display-name'),
   myStatusIndicator: document.getElementById('my-status-indicator'),
   statusSelector: document.getElementById('status-selector'),
   btnLogout: document.getElementById('btn-logout'),
+  btnEditProfileTrigger: document.getElementById('btn-edit-profile-trigger'),
+  btnOpenEditProfile: document.getElementById('btn-open-edit-profile'),
+  modalProfile: document.getElementById('modal-profile'),
+  btnCloseProfile: document.getElementById('btn-close-profile'),
+  btnCancelProfile: document.getElementById('btn-cancel-profile'),
+  btnSaveProfile: document.getElementById('btn-save-profile'),
+  btnProfileUseFallback: document.getElementById('btn-profile-use-fallback'),
+  inputProfileName: document.getElementById('input-profile-name'),
+  profileNameCount: document.getElementById('profile-name-count'),
+  profilePreviewAvatar: document.getElementById('profile-preview-avatar'),
+  profilePreviewName: document.getElementById('profile-preview-name'),
+  profilePreviewEmail: document.getElementById('profile-preview-email'),
+  profilePresetAvatarsGrid: document.getElementById('profile-preset-avatars-grid'),
+  profileDropzone: document.getElementById('profile-dropzone'),
+  inputProfileFile: document.getElementById('input-profile-file'),
+  profileFeedback: document.getElementById('profile-feedback'),
+  profileFeedbackText: document.getElementById('profile-feedback-text'),
+  profileSaveSpinner: document.getElementById('profile-save-spinner'),
+  profileSaveBtnText: document.getElementById('profile-save-btn-text'),
   
   // Chat Window & Header
   channelIconContainer: document.getElementById('channel-icon-container'),
@@ -271,7 +300,7 @@ async function initializeFirebase() {
       state.isFirebaseActive = false;
     }
   } else {
-    console.info('ℹ️ Operating in Sandbox/Demo mode.');
+    console.warn('⚠️ Firebase configuration is pending or unavailable.');
   }
 }
 
@@ -386,25 +415,13 @@ async function handleEmailPasswordAuth() {
       dom.btnSubmitAuth.disabled = false;
     }
   } else {
-    // Sandbox / Dev Mode Mock Login
-    setTimeout(() => {
-      const displayName = name || email.split('@')[0];
-      const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=4f46e5&color=fff`;
-      const mockProfile = {
-        uid: `student_${btoa(email).substring(0, 10)}`,
-        displayName: displayName,
-        email: email,
-        photoURL: avatarUrl
-      };
-      const mockToken = `demo-token-${mockProfile.uid}`;
-      handleUserLoggedIn(mockProfile, mockToken);
-      dom.authSpinner.classList.add('hidden');
-      dom.btnSubmitAuth.disabled = false;
-    }, 400);
+    showAuthError('Firebase Authentication service is initializing. Please wait a moment and try again.');
+    dom.authSpinner.classList.add('hidden');
+    dom.btnSubmitAuth.disabled = false;
   }
 }
 
-// Google Sign-In
+// Google Sign-In (Official Firebase Authentication)
 async function handleGoogleSignIn() {
   if (state.isFirebaseActive) {
     try {
@@ -415,43 +432,36 @@ async function handleGoogleSignIn() {
       showAuthError(`Google Sign-In: ${err.message}`);
     }
   } else {
-    // Sandbox Google Login simulation
-    const mockProfile = {
-      uid: `google_student_${Math.random().toString(36).substring(2, 8)}`,
-      displayName: 'Alex Rivera (Google)',
-      email: 'alex.rivera@school.edu',
-      photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80'
-    };
-    handleUserLoggedIn(mockProfile, `demo-token-${mockProfile.uid}`);
+    showAuthError('Firebase Authentication service is initializing. Please wait a moment and try again.');
   }
-}
-
-// Quick Student Demo Login
-function handleDemoLogin(name, email) {
-  const avatars = {
-    'Alex Rivera': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
-    'Maya Chen': 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=120&auto=format&fit=crop&q=80',
-    'Jordan Smith': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80'
-  };
-
-  const profile = {
-    uid: `demo_${email.replace(/[@.]/g, '_')}`,
-    displayName: name,
-    email: email,
-    photoURL: avatars[name] || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=3b82f6&color=fff`
-  };
-
-  handleUserLoggedIn(profile, `demo-token-${profile.uid}`);
 }
 
 // ==================================================================
 // 5. USER SESSION TRANSITIONS (AUTH <-> CHAT WORKSPACE)
 // ==================================================================
 function handleUserLoggedIn(userProfile, token) {
+  // Check if we have a locally stored custom profile for this user
+  try {
+    const cached = localStorage.getItem('campusconnect_user_profile_' + userProfile.uid);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed.name) userProfile.displayName = parsed.name;
+      if (parsed.picture !== undefined) userProfile.photoURL = parsed.picture || getUiAvatarsUrl(userProfile.displayName);
+    }
+  } catch (e) {}
+
+  if (!userProfile.photoURL) {
+    userProfile.photoURL = getUiAvatarsUrl(userProfile.displayName);
+  }
+
   state.currentUser = userProfile;
+  state.authToken = token;
 
   // Update Profile Sidebar UI
   dom.myAvatar.src = userProfile.photoURL;
+  dom.myAvatar.onerror = () => {
+    dom.myAvatar.src = getUiAvatarsUrl(userProfile.displayName);
+  };
   dom.myDisplayName.textContent = userProfile.displayName;
 
   // Switch Views
@@ -472,6 +482,8 @@ function handleUserLoggedOut() {
   }
   state.currentUser = null;
   state.currentRoom = 'general';
+  state.roomCaches = {};
+  cleanupMessageIntersectionObserver();
   
   dom.chatView.classList.add('hidden');
   dom.authView.classList.remove('hidden');
@@ -489,8 +501,14 @@ function connectSocket(token, userProfile) {
   dom.serverDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
   dom.serverText.textContent = 'Connecting...';
 
-  // Instantiate Socket.IO client passing token in auth payload
+  // Instantiate Socket.IO client configured for high-speed WebSockets and resilience
   state.socket = io({
+    transports: ['websocket', 'polling'], // Prefer WebSockets directly for minimal latency
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 10000,
     auth: {
       token: token,
       user: {
@@ -508,8 +526,26 @@ function connectSocket(token, userProfile) {
     dom.serverDot.className = 'w-2 h-2 rounded-full bg-emerald-500';
     dom.serverText.textContent = 'Live Connected';
     // Join current room on initial connect
-    state.socket.emit('user:join_room', { roomId: state.currentRoom });
+    if (state.isDirectMessage && state.dmTargetUser) {
+      state.socket.emit('dm:join', { targetUid: state.dmTargetUser.uid });
+    } else {
+      state.socket.emit('user:join_room', { roomId: state.currentRoom });
+    }
   });
+
+  // Seamless Reconnection handler
+  if (state.socket.io) {
+    state.socket.io.on('reconnect', () => {
+      console.log('🔄 Socket.IO reconnected successfully');
+      dom.serverDot.className = 'w-2 h-2 rounded-full bg-emerald-500';
+      dom.serverText.textContent = 'Live Connected';
+      if (state.isDirectMessage && state.dmTargetUser) {
+        state.socket.emit('dm:join', { targetUid: state.dmTargetUser.uid });
+      } else {
+        state.socket.emit('user:join_room', { roomId: state.currentRoom });
+      }
+    });
+  }
 
   // Connection error
   state.socket.on('connect_error', (error) => {
@@ -527,17 +563,70 @@ function connectSocket(token, userProfile) {
 
   // Room Message History received
   state.socket.on('room:history', (data) => {
+    const historyMsgs = data.messages || [];
+    state.roomCaches[data.roomId] = historyMsgs;
+
     if (data.roomId === state.currentRoom) {
-      state.messages = data.messages || [];
+      state.messages = historyMsgs;
       renderMessagesList(state.messages);
+      setupMessageIntersectionObserver();
       checkAndMarkMessagesRead();
     }
   });
 
-  // Incoming new message
+  // Room Message History cleared across all clients
+  state.socket.on('room:history_cleared', () => {
+    state.roomCaches = {};
+    state.messages = [];
+    renderMessagesList([]);
+  });
+
+  // Incoming new message (with instant optimistic reconciliation)
   state.socket.on('message:receive', (message) => {
     if (message.roomId === state.currentRoom) {
+      // Check if this incoming message matches a locally staged pending message
+      const pendingIdx = state.messages.findIndex(m =>
+        (message.clientTempId && (m.id === message.clientTempId || m.clientTempId === message.clientTempId)) ||
+        (m.isPending && m.sender?.uid === message.sender?.uid && m.content === message.content && Math.abs(m.timestamp - message.timestamp) < 8000)
+      );
+
+      if (pendingIdx !== -1) {
+        // Reconcile pending message with authoritative server message
+        const pendingMsg = state.messages[pendingIdx];
+        state.messages[pendingIdx] = message;
+
+        // Update in roomCache as well
+        if (state.roomCaches[state.currentRoom]) {
+          const cacheIdx = state.roomCaches[state.currentRoom].findIndex(m => m.id === pendingMsg.id);
+          if (cacheIdx !== -1) {
+            state.roomCaches[state.currentRoom][cacheIdx] = message;
+          }
+        }
+
+        const oldRow = document.getElementById(`msg-row-${pendingMsg.id}`);
+        if (oldRow) {
+          oldRow.id = `msg-row-${message.id}`;
+          oldRow.dataset.msgId = message.id;
+
+          const seenEl = document.getElementById(`seen-indicator-${pendingMsg.id}`);
+          if (seenEl) {
+            seenEl.id = `seen-indicator-${message.id}`;
+            seenEl.innerHTML = buildSeenStatusHtml(message.seenBy, true, false);
+          }
+
+          // Update action bar with the permanent message ID
+          const oldActionBar = oldRow.querySelector('.chat-action-bar');
+          if (oldActionBar) {
+            oldActionBar.replaceWith(buildMessageActionBar(message));
+          }
+          return;
+        }
+      }
+
       state.messages.push(message);
+      if (!state.roomCaches[state.currentRoom]) state.roomCaches[state.currentRoom] = [];
+      state.roomCaches[state.currentRoom].push(message);
+
       appendMessageToChat(message);
       scrollToBottom();
       checkAndMarkMessagesRead();
@@ -580,7 +669,7 @@ function connectSocket(token, userProfile) {
     }
   });
 
-  // Real-time Seen / Read Receipt Update
+  // Real-time Seen / Read Receipt Update (Batch & Individual)
   state.socket.on('message:seen_update', ({ roomId, seenUpdates }) => {
     if (roomId !== state.currentRoom || !Array.isArray(seenUpdates)) return;
     seenUpdates.forEach(({ messageId, seenBy }) => {
@@ -593,6 +682,50 @@ function connectSocket(token, userProfile) {
         indicatorEl.innerHTML = buildSeenStatusHtml(seenBy, true);
       }
     });
+  });
+
+  // Individual message:read event broadcast from server
+  state.socket.on('message:read', ({ roomId, messageId, seenBy, readBy }) => {
+    if (roomId !== state.currentRoom) return;
+    const targetMsg = state.messages.find(m => m.id === messageId);
+    if (targetMsg) {
+      targetMsg.seenBy = seenBy;
+    }
+    const indicatorEl = document.getElementById(`seen-indicator-${messageId}`);
+    if (indicatorEl) {
+      indicatorEl.innerHTML = buildSeenStatusHtml(seenBy, true);
+    }
+  });
+
+  // Real-time Profile Updated event from server
+  state.socket.on('user:profile_updated', ({ uid, name, picture }) => {
+    handleRemoteProfileUpdated({ uid, name, picture });
+  });
+
+  // Profile Sync event from server upon connection/reconnection
+  state.socket.on('user:profile_sync', ({ uid, name, picture }) => {
+    if (uid === state.currentUser?.uid) {
+      if (name) {
+        state.currentUser.displayName = name;
+        dom.myDisplayName.textContent = name;
+      }
+      if (picture !== undefined) {
+        state.currentUser.photoURL = picture || getUiAvatarsUrl(name || state.currentUser.displayName);
+        dom.myAvatar.src = state.currentUser.photoURL;
+      }
+    }
+  });
+
+  state.socket.on('profile:update_success', ({ uid, name, picture }) => {
+    showProfileFeedback('Profile saved and updated across campus in real-time!', 'success');
+    setTimeout(() => {
+      closeProfileModal();
+    }, 900);
+  });
+
+  state.socket.on('profile:update_error', ({ message }) => {
+    showProfileFeedback(message || 'Failed to update profile', 'error');
+    setProfileSavingState(false);
   });
 
   // Direct Message Incoming Notification
@@ -660,6 +793,9 @@ function switchChannel(channelId) {
   const target = state.channels.find(c => c.id === channelId);
   if (!target) return;
 
+  // Clean up existing observer and timers
+  cleanupMessageIntersectionObserver();
+
   // Clear previous typing states
   state.activeTypers.clear();
   updateTypingBannerUI();
@@ -676,18 +812,25 @@ function switchChannel(channelId) {
   dom.currentChannelTopic.textContent = target.topic;
   dom.messageInput.placeholder = `Message ${target.name}... (*bold*, _italic_, \`code\`)`;
 
-  // Clear current messages while history loads
-  dom.messagesContainer.innerHTML = `
-    <div class="h-full flex items-center justify-center text-slate-500 text-xs">
-      <div class="flex items-center gap-2">
-        <svg class="animate-spin h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <span>Loading ${target.name} history...</span>
+  // Instant render from local room cache (0ms latency!)
+  if (state.roomCaches[channelId] && state.roomCaches[channelId].length > 0) {
+    state.messages = state.roomCaches[channelId];
+    renderMessagesList(state.messages);
+    setupMessageIntersectionObserver();
+  } else {
+    // Clear current messages while history loads
+    dom.messagesContainer.innerHTML = `
+      <div class="h-full flex items-center justify-center text-slate-500 text-xs">
+        <div class="flex items-center gap-2">
+          <svg class="animate-spin h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span>Loading ${target.name} history...</span>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  }
 
   // Inform server of room change
   if (state.socket) {
@@ -744,6 +887,9 @@ function openDirectMessage(targetUser) {
   const dmRoomId = `dm_${uids[0]}_${uids[1]}`;
   state.currentRoom = dmRoomId;
 
+  // Clean up observer
+  cleanupMessageIntersectionObserver();
+
   // Add to active DMs map and reset unread count
   state.activeDirectMessages.set(targetUser.uid, {
     uid: targetUser.uid,
@@ -768,18 +914,25 @@ function openDirectMessage(targetUser) {
   dom.channelOccupantsBadge.textContent = 'Private Chat';
   dom.messageInput.placeholder = `Message @${targetUser.name}... (*bold*, _italic_, \`code\`)`;
 
-  // Loading state
-  dom.messagesContainer.innerHTML = `
-    <div class="h-full flex items-center justify-center text-slate-500 text-xs">
-      <div class="flex items-center gap-2">
-        <svg class="animate-spin h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <span>Opening chat with ${targetUser.name}...</span>
+  // Instant render from local room cache (0ms latency!)
+  if (state.roomCaches[dmRoomId] && state.roomCaches[dmRoomId].length > 0) {
+    state.messages = state.roomCaches[dmRoomId];
+    renderMessagesList(state.messages);
+    setupMessageIntersectionObserver();
+  } else {
+    // Loading state
+    dom.messagesContainer.innerHTML = `
+      <div class="h-full flex items-center justify-center text-slate-500 text-xs">
+        <div class="flex items-center gap-2">
+          <svg class="animate-spin h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span>Opening chat with ${targetUser.name}...</span>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  }
 
   // Join DM room via socket
   if (state.socket) {
@@ -1043,7 +1196,9 @@ function appendMessageToChat(message) {
   
   const msgWrapper = document.createElement('div');
   msgWrapper.id = `msg-row-${message.id}`;
-  msgWrapper.className = `relative flex gap-3 max-w-3xl ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'} group my-2`;
+  msgWrapper.dataset.msgId = message.id;
+  msgWrapper.dataset.senderUid = message.sender?.uid || '';
+  msgWrapper.className = `relative flex gap-3 max-w-3xl ${isMe ? 'ml-auto flex-row-reverse' : 'mr-auto'} group my-2 chat-message-row`;
 
   // Floating Message Action Bar (Reactions)
   const actionBar = buildMessageActionBar(message);
@@ -1051,9 +1206,13 @@ function appendMessageToChat(message) {
 
   // Avatar
   const avatar = document.createElement('img');
-  avatar.src = message.sender?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.sender?.name || 'Student')}&background=3b82f6&color=fff`;
+  avatar.src = message.sender?.avatar || getUiAvatarsUrl(message.sender?.name || 'Student');
   avatar.alt = message.sender?.name || 'Student';
-  avatar.className = 'w-8 h-8 rounded-full object-cover shrink-0 mt-0.5 border border-slate-800';
+  avatar.dataset.authorUid = message.sender?.uid || '';
+  avatar.className = 'w-8 h-8 rounded-full object-cover shrink-0 mt-0.5 border border-slate-800 transition-transform';
+  avatar.onerror = () => {
+    avatar.src = getUiAvatarsUrl(message.sender?.name || 'Student');
+  };
 
   // Bubble wrapper
   const contentWrapper = document.createElement('div');
@@ -1064,10 +1223,10 @@ function appendMessageToChat(message) {
   metaHeader.className = `flex items-center gap-2 mb-1 px-1 text-xs text-slate-400 ${isMe ? 'flex-row-reverse' : ''}`;
   
   metaHeader.innerHTML = `
-    <span class="font-semibold text-slate-200">${isMe ? 'You' : (message.sender?.name || 'Student')}</span>
+    <span data-author-name-uid="${message.sender?.uid || ''}" class="font-semibold text-slate-200">${isMe ? 'You' : (message.sender?.name || 'Student')}</span>
     ${!isMe ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono">Student</span>' : ''}
     <span class="text-[11px] text-slate-500">${message.formattedTime || ''}</span>
-    ${isMe ? `<span id="seen-indicator-${message.id}">${buildSeenStatusHtml(message.seenBy, true)}</span>` : ''}
+    ${isMe ? `<span id="seen-indicator-${message.id}">${buildSeenStatusHtml(message.seenBy, true, message.isPending)}</span>` : ''}
   `;
 
   // Bubble content with rich text formatting (if text content present)
@@ -1124,6 +1283,9 @@ function appendMessageToChat(message) {
   msgWrapper.appendChild(contentWrapper);
 
   dom.messagesContainer.appendChild(msgWrapper);
+  if (!isMe) {
+    observeMessageForRead(msgWrapper);
+  }
 }
 
 // --------------------------------------------------
@@ -1187,7 +1349,30 @@ function renderReactionPillsInto(container, message) {
 }
 
 function toggleMessageReaction(messageId, emoji) {
-  if (!state.socket || !messageId || !emoji) return;
+  if (!state.socket || !messageId || !emoji || !state.currentUser) return;
+
+  // 1. Instant optimistic local UI update (0ms latency!)
+  const msg = state.messages.find(m => m.id === messageId);
+  if (msg) {
+    if (!msg.reactions) msg.reactions = {};
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+    const uid = state.currentUser.uid;
+    const existingIdx = msg.reactions[emoji].indexOf(uid);
+    if (existingIdx > -1) {
+      msg.reactions[emoji].splice(existingIdx, 1);
+      if (msg.reactions[emoji].length === 0) {
+        delete msg.reactions[emoji];
+      }
+    } else {
+      msg.reactions[emoji].push(uid);
+    }
+    const container = document.getElementById(`reactions-${messageId}`);
+    if (container) {
+      renderReactionPillsInto(container, { id: messageId, reactions: msg.reactions });
+    }
+  }
+
+  // 2. Transmit to server
   state.socket.emit('message:react', {
     roomId: state.currentRoom,
     messageId,
@@ -1196,8 +1381,97 @@ function toggleMessageReaction(messageId, emoji) {
 }
 
 // --------------------------------------------------
-// Read Receipts Handlers
+// Read Receipts Handlers & Batched Intersection Observer
 // --------------------------------------------------
+let messageObserver = null;
+const observedMessageIds = new Set();
+let readBatchTimeout = null;
+const readReceiptQueue = new Set();
+
+function queueMessageForRead(msgId) {
+  readReceiptQueue.add(msgId);
+  if (!readBatchTimeout) {
+    readBatchTimeout = setTimeout(() => {
+      flushReadReceiptQueue();
+    }, 40);
+  }
+}
+
+function flushReadReceiptQueue() {
+  readBatchTimeout = null;
+  if (!state.socket || !state.currentUser || readReceiptQueue.size === 0) return;
+  const ids = Array.from(readReceiptQueue);
+  readReceiptQueue.clear();
+
+  state.socket.emit('message:read', {
+    roomId: state.currentRoom,
+    messageIds: ids
+  });
+}
+
+function cleanupMessageIntersectionObserver() {
+  if (messageObserver) {
+    messageObserver.disconnect();
+    messageObserver = null;
+  }
+  observedMessageIds.clear();
+  if (readBatchTimeout) {
+    clearTimeout(readBatchTimeout);
+    readBatchTimeout = null;
+  }
+  readReceiptQueue.clear();
+}
+
+function setupMessageIntersectionObserver() {
+  if (messageObserver) {
+    messageObserver.disconnect();
+  }
+
+  if (!('IntersectionObserver' in window)) {
+    checkAndMarkMessagesRead();
+    return;
+  }
+
+  messageObserver = new IntersectionObserver((entries) => {
+    if (document.visibilityState !== 'visible') return;
+    if (!state.socket || !state.currentUser) return;
+
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const msgId = entry.target.dataset.msgId;
+        const senderUid = entry.target.dataset.senderUid;
+
+        if (msgId && senderUid && senderUid !== state.currentUser.uid && !observedMessageIds.has(msgId)) {
+          const msg = state.messages.find(m => m.id === msgId);
+          const alreadySeen = msg && Array.isArray(msg.seenBy) && msg.seenBy.some(s => s.uid === state.currentUser.uid);
+
+          if (!alreadySeen) {
+            observedMessageIds.add(msgId);
+            queueMessageForRead(msgId);
+          }
+        }
+      }
+    });
+  }, {
+    root: dom.messagesContainer,
+    threshold: 0.15
+  });
+
+  // Attach observer to all existing classmate messages in container
+  const rows = dom.messagesContainer.querySelectorAll('.chat-message-row');
+  rows.forEach(row => {
+    if (row.dataset.senderUid && row.dataset.senderUid !== state.currentUser?.uid) {
+      messageObserver.observe(row);
+    }
+  });
+}
+
+function observeMessageForRead(msgEl) {
+  if (messageObserver && msgEl) {
+    messageObserver.observe(msgEl);
+  }
+}
+
 function checkAndMarkMessagesRead() {
   if (!state.currentUser || !state.socket) return;
   const unreadMessageIds = [];
@@ -1212,35 +1486,410 @@ function checkAndMarkMessagesRead() {
   });
 
   if (unreadMessageIds.length > 0) {
-    state.socket.emit('message:read', {
-      roomId: state.currentRoom,
-      messageIds: unreadMessageIds
+    unreadMessageIds.forEach(id => {
+      observedMessageIds.add(id);
+      queueMessageForRead(id);
     });
   }
 }
 
-function buildSeenStatusHtml(seenBy, isMe) {
+function buildSeenStatusHtml(seenBy, isMe, isPending = false) {
   if (!isMe) return '';
+
+  if (isPending) {
+    return `
+      <span class="inline-flex items-center gap-1 text-[10px] text-slate-400 font-normal select-none" title="Sending message...">
+        <svg class="animate-spin w-2.5 h-2.5 text-slate-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span>Sending</span>
+      </span>
+    `;
+  }
+
   const seenList = Array.isArray(seenBy) ? seenBy : [];
   if (seenList.length > 0) {
-    const names = seenList.map(s => s.name || 'Classmate').join(', ');
+    const names = seenList.map(s => {
+      const timeStr = s.seenAt ? new Date(s.seenAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      return `${s.name || 'Classmate'}${timeStr ? ` (${timeStr})` : ''}`;
+    }).join(', ');
+
     return `
-      <span class="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium select-none" title="Seen by: ${names}">
-        <svg class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+      <span class="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium select-none cursor-help transition-all hover:text-emerald-300" title="Seen by: ${names}">
+        <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7M11 13l4 4L23 7" />
         </svg>
-        <span>Seen</span>
+        <span>Seen${seenList.length > 1 ? ` (${seenList.length})` : ''}</span>
       </span>
     `;
   } else {
     return `
-      <span class="inline-flex items-center gap-0.5 text-[10px] text-slate-500 font-normal select-none" title="Delivered">
-        <svg class="w-3 h-3 text-slate-500" viewBox="0 0 20 20" fill="currentColor">
-          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+      <span class="inline-flex items-center gap-0.5 text-[10px] text-slate-500 font-normal select-none" title="Delivered to channel">
+        <svg class="w-3 h-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
         </svg>
         <span>Sent</span>
       </span>
     `;
+  }
+}
+
+// ==================================================================
+// 12. USER PROFILE EDITING & AVATAR SELECTION
+// ==================================================================
+const PRESET_AVATARS = [
+  { id: 'scholar-1', name: 'Scholar', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' },
+  { id: 'creative-2', name: 'Creative', url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80' },
+  { id: 'coder-3', name: 'Developer', url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80' },
+  { id: 'leader-4', name: 'Leader', url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80' },
+  { id: 'science-5', name: 'Researcher', url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80' },
+  { id: 'athlete-6', name: 'Athlete', url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80' },
+  { id: 'designer-7', name: 'Designer', url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80' },
+  { id: 'engineer-8', name: 'Engineer', url: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&auto=format&fit=crop&q=80' }
+];
+
+function getUiAvatarsUrl(name) {
+  const cleanName = (name && name.trim()) ? name.trim() : 'Student';
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(cleanName)}&background=4f46e5&color=fff&size=128&bold=true`;
+}
+
+function openProfileModal() {
+  if (!state.currentUser) return;
+
+  const currentDisplayName = state.currentUser.displayName || 'Student';
+  const currentPhoto = state.currentUser.photoURL || null;
+
+  state.profileEdit = {
+    stagedName: currentDisplayName,
+    stagedPicture: currentPhoto,
+    selectedPresetId: null,
+    isSaving: false
+  };
+
+  // Populate inputs
+  if (dom.inputProfileName) {
+    dom.inputProfileName.value = currentDisplayName;
+  }
+  if (dom.profileNameCount) {
+    dom.profileNameCount.textContent = `${currentDisplayName.length}/50`;
+  }
+  if (dom.profilePreviewName) {
+    dom.profilePreviewName.textContent = currentDisplayName;
+  }
+  if (dom.profilePreviewEmail) {
+    dom.profilePreviewEmail.textContent = state.currentUser.email || 'student@campusconnect.edu';
+  }
+
+  // Render presets & initial preview
+  renderPresetAvatarsGrid();
+  updateProfileModalPreview();
+  showProfileFeedback('', 'none');
+  setProfileSavingState(false);
+
+  // Show modal
+  if (dom.modalProfile) {
+    dom.modalProfile.classList.remove('hidden');
+    if (dom.inputProfileName) {
+      dom.inputProfileName.focus();
+      dom.inputProfileName.select();
+    }
+  }
+}
+
+function closeProfileModal() {
+  if (dom.modalProfile) {
+    dom.modalProfile.classList.add('hidden');
+  }
+  showProfileFeedback('', 'none');
+  setProfileSavingState(false);
+}
+
+function updateProfileModalPreview() {
+  const rawName = dom.inputProfileName ? dom.inputProfileName.value.trim() : '';
+  const effectiveName = rawName || 'Student';
+
+  if (dom.profilePreviewName) {
+    dom.profilePreviewName.textContent = effectiveName;
+  }
+
+  if (dom.profilePreviewAvatar) {
+    if (state.profileEdit.stagedPicture) {
+      dom.profilePreviewAvatar.src = state.profileEdit.stagedPicture;
+    } else {
+      dom.profilePreviewAvatar.src = getUiAvatarsUrl(effectiveName);
+    }
+    dom.profilePreviewAvatar.onerror = () => {
+      dom.profilePreviewAvatar.src = getUiAvatarsUrl(effectiveName);
+    };
+  }
+}
+
+function renderPresetAvatarsGrid() {
+  if (!dom.profilePresetAvatarsGrid) return;
+  dom.profilePresetAvatarsGrid.innerHTML = '';
+
+  PRESET_AVATARS.forEach(preset => {
+    const isSelected = state.profileEdit.stagedPicture === preset.url;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `group relative p-0.5 rounded-full border-2 transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+      isSelected
+        ? 'border-indigo-500 ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-900 shadow-lg shadow-indigo-500/20'
+        : 'border-slate-800 hover:border-indigo-400'
+    }`;
+    btn.title = `Select ${preset.name} Avatar`;
+
+    btn.innerHTML = `
+      <img src="${preset.url}" alt="${preset.name}" class="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover" />
+      ${isSelected ? `
+        <div class="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold ring-1 ring-slate-950">
+          ✓
+        </div>
+      ` : ''}
+    `;
+
+    btn.addEventListener('click', () => {
+      state.profileEdit.stagedPicture = preset.url;
+      state.profileEdit.selectedPresetId = preset.id;
+      renderPresetAvatarsGrid();
+      updateProfileModalPreview();
+      showProfileFeedback(`Selected "${preset.name}" avatar. Click Save to apply.`, 'info');
+    });
+
+    dom.profilePresetAvatarsGrid.appendChild(btn);
+  });
+}
+
+function handleProfilePhotoFile(file) {
+  if (!file || !file.type.startsWith('image/')) {
+    showProfileFeedback('Please choose a valid image file (PNG, JPG, WebP)', 'error');
+    return;
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    showProfileFeedback('Image size must be under 5MB', 'error');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const rawDataUrl = e.target.result;
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const size = 256;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Center square crop
+        const minDim = Math.min(img.width, img.height);
+        const sx = (img.width - minDim) / 2;
+        const sy = (img.height - minDim) / 2;
+
+        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+
+        state.profileEdit.stagedPicture = compressedDataUrl;
+        state.profileEdit.selectedPresetId = null;
+
+        renderPresetAvatarsGrid();
+        updateProfileModalPreview();
+        showProfileFeedback('Photo loaded and optimized! Click Save Changes.', 'success');
+      } catch (cropErr) {
+        state.profileEdit.stagedPicture = rawDataUrl;
+        updateProfileModalPreview();
+        showProfileFeedback('Custom photo loaded! Click Save Changes.', 'success');
+      }
+    };
+    img.onerror = () => {
+      showProfileFeedback('Could not decode the selected image', 'error');
+    };
+    img.src = rawDataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+function setProfileSavingState(isSaving) {
+  state.profileEdit.isSaving = isSaving;
+  if (dom.btnSaveProfile) {
+    dom.btnSaveProfile.disabled = isSaving;
+  }
+  if (dom.profileSaveSpinner) {
+    if (isSaving) {
+      dom.profileSaveSpinner.classList.remove('hidden');
+    } else {
+      dom.profileSaveSpinner.classList.add('hidden');
+    }
+  }
+  if (dom.profileSaveBtnText) {
+    dom.profileSaveBtnText.textContent = isSaving ? 'Saving Profile...' : 'Save Changes';
+  }
+}
+
+function showProfileFeedback(msg, type = 'info') {
+  if (!dom.profileFeedback || !dom.profileFeedbackText) return;
+  if (!msg || type === 'none') {
+    dom.profileFeedback.classList.add('hidden');
+    return;
+  }
+
+  dom.profileFeedbackText.textContent = msg;
+  dom.profileFeedback.className = 'mb-4 p-3 rounded-xl text-xs flex items-center gap-2 border';
+
+  if (type === 'success') {
+    dom.profileFeedback.classList.add('bg-emerald-950/40', 'border-emerald-800/80', 'text-emerald-300');
+  } else if (type === 'error') {
+    dom.profileFeedback.classList.add('bg-rose-950/40', 'border-rose-800/80', 'text-rose-300');
+  } else {
+    dom.profileFeedback.classList.add('bg-indigo-950/40', 'border-indigo-800/80', 'text-indigo-300');
+  }
+}
+
+async function saveUserProfileChanges() {
+  if (!state.currentUser) return;
+  const newName = dom.inputProfileName ? dom.inputProfileName.value.trim() : '';
+
+  if (!newName || newName.length < 2 || newName.length > 50) {
+    showProfileFeedback('Display name must be between 2 and 50 characters', 'error');
+    if (dom.inputProfileName) dom.inputProfileName.focus();
+    return;
+  }
+
+  setProfileSavingState(true);
+  const newPicture = state.profileEdit.stagedPicture; // string URL or null for UI-Avatars fallback
+
+  try {
+    // 1. If Firebase Auth is active, update client profile
+    if (state.isFirebaseActive && firebase.auth().currentUser) {
+      try {
+        await firebase.auth().currentUser.updateProfile({
+          displayName: newName,
+          photoURL: newPicture || getUiAvatarsUrl(newName)
+        });
+      } catch (fbErr) {
+        console.warn('Firebase Auth updateProfile non-fatal warning:', fbErr.message);
+      }
+    }
+
+    // 2. Broadcast via Socket.IO for immediate real-time sync across all connected clients
+    if (state.socket) {
+      state.socket.emit('profile:update', {
+        name: newName,
+        picture: newPicture
+      });
+    }
+
+    // 3. Persist via server REST API
+    try {
+      await fetch('/api/profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${state.authToken || 'demo_token'}`
+        },
+        body: JSON.stringify({
+          name: newName,
+          picture: newPicture,
+          clientUser: state.currentUser
+        })
+      });
+    } catch (apiErr) {
+      console.warn('REST API profile update non-fatal warning:', apiErr);
+    }
+
+    // 4. Update local user state immediately
+    handleRemoteProfileUpdated({
+      uid: state.currentUser.uid,
+      name: newName,
+      picture: newPicture
+    });
+
+    showProfileFeedback('Profile saved! Updated across campus in real-time.', 'success');
+    setTimeout(() => {
+      closeProfileModal();
+    }, 900);
+  } catch (err) {
+    console.error('Error saving profile:', err);
+    showProfileFeedback(err.message || 'Failed to update profile', 'error');
+    setProfileSavingState(false);
+  }
+}
+
+function handleRemoteProfileUpdated({ uid, name, picture }) {
+  const avatarUrl = picture || getUiAvatarsUrl(name);
+
+  // 1. If this is the current active user
+  if (state.currentUser && state.currentUser.uid === uid) {
+    state.currentUser.displayName = name;
+    state.currentUser.photoURL = avatarUrl;
+    if (dom.myDisplayName) dom.myDisplayName.textContent = name;
+    if (dom.myAvatar) {
+      dom.myAvatar.src = avatarUrl;
+      dom.myAvatar.onerror = () => { dom.myAvatar.src = getUiAvatarsUrl(name); };
+    }
+
+    // Cache locally
+    try {
+      localStorage.setItem('campusconnect_user_profile_' + uid, JSON.stringify({
+        name,
+        picture: picture || null
+      }));
+    } catch (e) {}
+  }
+
+  // 2. Update all messages sent by this user in memory
+  state.messages.forEach(msg => {
+    if (msg.sender && msg.sender.uid === uid) {
+      msg.sender.name = name;
+      msg.sender.avatar = avatarUrl;
+    }
+  });
+
+  // 3. Update DOM avatars & names for all existing message bubbles in chat
+  const authorAvatars = document.querySelectorAll(`img[data-author-uid="${uid}"]`);
+  authorAvatars.forEach(img => {
+    img.src = avatarUrl;
+    img.alt = name;
+    img.onerror = () => { img.src = getUiAvatarsUrl(name); };
+  });
+
+  const authorNameTags = document.querySelectorAll(`[data-author-name-uid="${uid}"]`);
+  authorNameTags.forEach(el => {
+    el.textContent = (state.currentUser && state.currentUser.uid === uid) ? 'You' : name;
+  });
+
+  // 4. Update Direct Messages list if present
+  if (state.activeDirectMessages.has(uid)) {
+    const dm = state.activeDirectMessages.get(uid);
+    dm.name = name;
+    dm.picture = avatarUrl;
+    renderDirectMessagesList();
+  }
+
+  // 5. If currently chatting with this user in DM, update DM header
+  if (state.isDirectMessage && state.dmTargetUser && state.dmTargetUser.uid === uid) {
+    state.dmTargetUser.name = name;
+    state.dmTargetUser.picture = avatarUrl;
+    dom.currentChannelTitle.textContent = name;
+    if (dom.dmHeaderAvatar) {
+      dom.dmHeaderAvatar.src = avatarUrl;
+      dom.dmHeaderAvatar.onerror = () => { dom.dmHeaderAvatar.src = getUiAvatarsUrl(name); };
+    }
+  }
+
+  // 6. Update online users presence row if rendered
+  const onlineUserEl = document.querySelector(`.online-user-item[data-uid="${uid}"]`);
+  if (onlineUserEl) {
+    const nameEl = onlineUserEl.querySelector('.online-user-name');
+    const avatarEl = onlineUserEl.querySelector('.online-user-avatar');
+    if (nameEl) nameEl.textContent = name;
+    if (avatarEl) {
+      avatarEl.src = avatarUrl;
+      avatarEl.onerror = () => { avatarEl.src = getUiAvatarsUrl(name); };
+    }
   }
 }
 
@@ -1280,27 +1929,65 @@ function updateTypingBannerUI() {
   dom.typingContent.classList.remove('hidden');
 }
 
-// Handle sending message
+// Helper for client-side local timestamps
+function formatClientTimestamp(timestamp = Date.now()) {
+  const d = new Date(timestamp);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Handle sending message with instant optimistic local rendering
 function sendMessage() {
   const content = dom.messageInput.value.trim();
   const image = state.stagedImage;
 
-  if ((!content && !image) || !state.socket) return;
+  if ((!content && !image) || !state.socket || !state.currentUser) return;
 
+  const clientTempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = Date.now();
+
+  // Construct optimistic pending message object
+  const optimisticMsg = {
+    id: clientTempId,
+    clientTempId: clientTempId,
+    roomId: state.currentRoom,
+    sender: {
+      uid: state.currentUser.uid,
+      name: state.currentUser.displayName || 'You',
+      avatar: state.currentUser.photoURL,
+      email: state.currentUser.email
+    },
+    content: content,
+    image: image || null,
+    timestamp: now,
+    formattedTime: formatClientTimestamp(now),
+    reactions: {},
+    seenBy: [],
+    isPending: true
+  };
+
+  // 1. Instantly append to state and UI (0ms latency!)
+  state.messages.push(optimisticMsg);
+  if (!state.roomCaches[state.currentRoom]) {
+    state.roomCaches[state.currentRoom] = [];
+  }
+  state.roomCaches[state.currentRoom].push(optimisticMsg);
+  appendMessageToChat(optimisticMsg);
+  scrollToBottom();
+
+  // 2. Clear inputs immediately
+  dom.messageInput.value = '';
+  if (image) {
+    clearStagedPhoto();
+  }
+  stopTyping();
+
+  // 3. Emit message to server with clientTempId for seamless reconciliation
   state.socket.emit('message:send', {
+    clientTempId: clientTempId,
     roomId: state.currentRoom,
     content: content,
     image: image || null
   });
-
-  // Clear staged photo
-  if (image) {
-    clearStagedPhoto();
-  }
-
-  // Stop typing indicator immediately
-  stopTyping();
-  dom.messageInput.value = '';
 }
 
 // Typing debounce handlers
@@ -1665,15 +2352,6 @@ function setupEventListeners() {
   // Google Sign-In Button
   dom.btnGoogleAuth.addEventListener('click', handleGoogleSignIn);
 
-  // Demo Login Buttons
-  dom.demoLoginButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const name = btn.getAttribute('data-name');
-      const email = btn.getAttribute('data-email');
-      handleDemoLogin(name, email);
-    });
-  });
-
   // Back to Channels Button from DM mode
   dom.btnBackToChannels.addEventListener('click', () => {
     switchChannel('general');
@@ -1803,6 +2481,86 @@ function setupEventListeners() {
     }
   });
 
+  // Profile Modal Event Listeners
+  if (dom.btnEditProfileTrigger) {
+    dom.btnEditProfileTrigger.addEventListener('click', openProfileModal);
+  }
+  if (dom.btnOpenEditProfile) {
+    dom.btnOpenEditProfile.addEventListener('click', openProfileModal);
+  }
+  if (dom.btnCloseProfile) {
+    dom.btnCloseProfile.addEventListener('click', closeProfileModal);
+  }
+  if (dom.btnCancelProfile) {
+    dom.btnCancelProfile.addEventListener('click', closeProfileModal);
+  }
+  if (dom.modalProfile) {
+    dom.modalProfile.addEventListener('click', (e) => {
+      if (e.target === dom.modalProfile) {
+        closeProfileModal();
+      }
+    });
+  }
+
+  // Profile Form & Live Inputs
+  if (dom.inputProfileName) {
+    dom.inputProfileName.addEventListener('input', (e) => {
+      const val = e.target.value;
+      if (dom.profileNameCount) {
+        dom.profileNameCount.textContent = `${val.length}/50`;
+      }
+      updateProfileModalPreview();
+    });
+  }
+
+  // Reset to UI-Avatars Fallback
+  if (dom.btnProfileUseFallback) {
+    dom.btnProfileUseFallback.addEventListener('click', () => {
+      state.profileEdit.stagedPicture = null;
+      state.profileEdit.selectedPresetId = null;
+      renderPresetAvatarsGrid();
+      updateProfileModalPreview();
+      showProfileFeedback('Switched to dynamic UI-Avatars fallback', 'info');
+    });
+  }
+
+  // File Upload via Dropzone or File Input
+  if (dom.profileDropzone && dom.inputProfileFile) {
+    dom.profileDropzone.addEventListener('click', () => {
+      dom.inputProfileFile.click();
+    });
+
+    dom.inputProfileFile.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleProfilePhotoFile(e.target.files[0]);
+      }
+    });
+
+    dom.profileDropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dom.profileDropzone.classList.add('border-indigo-500', 'bg-indigo-950/20');
+    });
+
+    ['dragleave', 'dragend'].forEach(evt => {
+      dom.profileDropzone.addEventListener(evt, () => {
+        dom.profileDropzone.classList.remove('border-indigo-500', 'bg-indigo-950/20');
+      });
+    });
+
+    dom.profileDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dom.profileDropzone.classList.remove('border-indigo-500', 'bg-indigo-950/20');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleProfilePhotoFile(e.dataTransfer.files[0]);
+      }
+    });
+  }
+
+  // Save Profile Button
+  if (dom.btnSaveProfile) {
+    dom.btnSaveProfile.addEventListener('click', saveUserProfileChanges);
+  }
+
   // Lightbox Close Handlers
   dom.btnCloseLightbox.addEventListener('click', closeImageLightbox);
   dom.modalImageLightbox.addEventListener('click', (e) => {
@@ -1823,12 +2581,27 @@ function setupEventListeners() {
       if (!dom.modalConfig.classList.contains('hidden')) {
         closeModal();
       }
+      if (dom.modalProfile && !dom.modalProfile.classList.contains('hidden')) {
+        closeProfileModal();
+      }
     }
   });
 }
 
 // Initial Boot
 document.addEventListener('DOMContentLoaded', () => {
+  // Purge any legacy demo/sandbox cache keys
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.includes('demo') || k.includes('sys_') || k.includes('mock'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+  } catch (e) {}
+
   initTheme();
   setupEventListeners();
   initializeFirebase();
