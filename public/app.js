@@ -3388,8 +3388,9 @@ function switchAdminTab(tabName) {
 // ==========================================
 async function fetchAdminStats() {
   try {
-    const data = await callAdminApi('/api/admin/stats');
+    const data = await callAdminApi('/api/admin/overview');
     const { stats } = data;
+    if (!stats) return;
     state.adminData.stats = stats;
 
     if (dom.adminStatMembers) dom.adminStatMembers.textContent = stats.totalMembers ?? '—';
@@ -3923,9 +3924,8 @@ function renderAdminMessagesList() {
       const roomId = btn.getAttribute('data-room-id');
       if (!confirm('Are you sure you want to delete this message?')) return;
       try {
-        await callAdminApi('/api/admin/messages/delete', {
-          method: 'POST',
-          body: { roomId, messageId: msgId }
+        await callAdminApi(`/api/admin/messages/${msgId}?roomId=${roomId}`, {
+          method: 'DELETE'
         });
         fetchAdminMessages();
       } catch (err) {
@@ -3950,9 +3950,8 @@ async function adminTogglePinMessage(messageId, pinned) {
 async function adminDeleteMessage(messageId) {
   if (!confirm('Delete this message from chat?')) return;
   try {
-    await callAdminApi('/api/admin/messages/delete', {
-      method: 'POST',
-      body: { roomId: state.currentRoom, messageId }
+    await callAdminApi(`/api/admin/messages/${messageId}?roomId=${state.currentRoom}`, {
+      method: 'DELETE'
     });
   } catch (err) {
     alert(`Failed to delete message: ${err.message}`);
