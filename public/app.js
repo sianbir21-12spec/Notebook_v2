@@ -933,6 +933,13 @@ function connectSocket(token, userProfile) {
   });
 
   // Campus-wide System Broadcast Announcement
+  state.socket.on('broadcast-message', (broadcast) => {
+    displaySystemBroadcast(broadcast);
+    if (broadcast && broadcast.message) {
+      appendSystemNotice(`📢 <strong>${escapeHtml(broadcast.title || 'Official Campus Announcement')}:</strong> ${escapeHtml(broadcast.message)}`);
+    }
+  });
+
   state.socket.on('admin:system_broadcast', (broadcast) => {
     displaySystemBroadcast(broadcast);
   });
@@ -3278,32 +3285,40 @@ function updateChannelLockStatusUI(isLocked) {
 function displaySystemBroadcast(broadcast) {
   state.activeSystemBroadcast = broadcast;
 
+  const banner = dom.systemBroadcastBanner || document.getElementById('system-broadcast-banner');
+  const titleEl = dom.broadcastTitle || document.getElementById('broadcast-title');
+  const messageEl = dom.broadcastMessage || document.getElementById('broadcast-message');
+  const iconEl = dom.broadcastPriorityIcon || document.getElementById('broadcast-priority-icon');
+
   if (broadcast && broadcast.message && broadcast.message.trim()) {
-    if (dom.broadcastTitle) dom.broadcastTitle.textContent = broadcast.title || 'Campus Notice';
-    if (dom.broadcastMessage) dom.broadcastMessage.textContent = broadcast.message;
+    if (titleEl) titleEl.textContent = broadcast.title ? `${broadcast.title}:` : 'Campus Notice:';
+    if (messageEl) messageEl.textContent = broadcast.message;
 
     // Set Priority Icon & Styling
-    if (dom.broadcastPriorityIcon) {
-      if (broadcast.priority === 'critical') {
-        dom.broadcastPriorityIcon.textContent = '🚨';
-        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-red-900/90 via-rose-900/80 to-slate-900 border-b border-red-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-red-950/40 relative z-20';
-      } else if (broadcast.priority === 'urgent') {
-        dom.broadcastPriorityIcon.textContent = '⚡';
-        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-amber-900/90 via-orange-900/80 to-slate-900 border-b border-amber-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-amber-950/40 relative z-20';
+    if (iconEl && banner) {
+      if (broadcast.priority === 'critical' || broadcast.priority === 'urgent') {
+        iconEl.textContent = '🚨';
+        banner.className = 'w-full px-4 py-2 bg-gradient-to-r from-red-900/95 via-rose-900/90 to-slate-900 border-b border-red-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-red-950/40 relative z-20';
+      } else if (broadcast.priority === 'warning') {
+        iconEl.textContent = '⚠️';
+        banner.className = 'w-full px-4 py-2 bg-gradient-to-r from-amber-900/95 via-orange-900/90 to-slate-900 border-b border-amber-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-amber-950/40 relative z-20';
+      } else if (broadcast.priority === 'celebration') {
+        iconEl.textContent = '🎉';
+        banner.className = 'w-full px-4 py-2 bg-gradient-to-r from-emerald-900/95 via-teal-900/90 to-slate-900 border-b border-emerald-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-emerald-950/40 relative z-20';
       } else {
-        dom.broadcastPriorityIcon.textContent = '📢';
-        dom.systemBroadcastBanner.className = 'w-full px-4 py-2 bg-gradient-to-r from-indigo-900/90 via-purple-900/80 to-slate-900 border-b border-indigo-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-indigo-950/40 relative z-20';
+        iconEl.textContent = '📢';
+        banner.className = 'w-full px-4 py-2 bg-gradient-to-r from-indigo-900/95 via-purple-900/90 to-slate-900 border-b border-indigo-500/50 flex items-center justify-between text-xs text-white shadow-lg shadow-indigo-950/40 relative z-20';
       }
     }
 
-    if (dom.systemBroadcastBanner) {
-      dom.systemBroadcastBanner.classList.remove('hidden');
-      dom.systemBroadcastBanner.classList.add('flex');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.classList.add('flex');
     }
   } else {
-    if (dom.systemBroadcastBanner) {
-      dom.systemBroadcastBanner.classList.add('hidden');
-      dom.systemBroadcastBanner.classList.remove('flex');
+    if (banner) {
+      banner.classList.add('hidden');
+      banner.classList.remove('flex');
     }
   }
 
@@ -3389,22 +3404,52 @@ function switchAdminTab(tabName) {
 async function fetchAdminStats() {
   try {
     const data = await callAdminApi('/api/admin/overview');
-    const { stats } = data;
-    if (!stats) return;
+    
+    // Null-checks for API response and statistics object to prevent runtime errors
+    if (!data || typeof data !== 'object') {
+      console.warn('Admin overview returned null or invalid data.');
+      return;
+    }
+
+    const stats = data.stats;
+    if (!stats || typeof stats !== 'object') {
+      console.warn('Admin statistics object is undefined or missing in response.');
+      return;
+    }
+
     state.adminData.stats = stats;
 
-    if (dom.adminStatMembers) dom.adminStatMembers.textContent = stats.totalMembers ?? '—';
-    if (dom.adminStatOnline) dom.adminStatOnline.textContent = stats.onlineMembers ?? '—';
-    if (dom.adminStatMessages) dom.adminStatMessages.textContent = stats.totalMessages ?? '—';
-    if (dom.adminStatChannels) dom.adminStatChannels.textContent = stats.totalChannels ?? '—';
-    if (dom.adminStatMuted) dom.adminStatMuted.textContent = stats.mutedCount ?? '0';
-    if (dom.adminStatBanned) dom.adminStatBanned.textContent = stats.bannedCount ?? '0';
+    if (dom.adminStatMembers) {
+      dom.adminStatMembers.textContent = stats.totalMembers != null ? stats.totalMembers : '—';
+    }
+    if (dom.adminStatOnline) {
+      const online = stats.onlineMembers != null ? stats.onlineMembers : stats.activeOnline;
+      dom.adminStatOnline.textContent = online != null ? online : '—';
+    }
+    if (dom.adminStatMessages) {
+      dom.adminStatMessages.textContent = stats.totalMessages != null ? stats.totalMessages : '—';
+    }
+    if (dom.adminStatChannels) {
+      const channels = stats.totalChannels != null ? stats.totalChannels : stats.channelsCount;
+      dom.adminStatChannels.textContent = channels != null ? channels : '—';
+    }
+    if (dom.adminStatMuted) {
+      dom.adminStatMuted.textContent = stats.mutedCount != null ? stats.mutedCount : '0';
+    }
+    if (dom.adminStatBanned) {
+      dom.adminStatBanned.textContent = stats.bannedCount != null ? stats.bannedCount : '0';
+    }
 
     if (dom.adminDiagUptime) {
-      const upSec = Math.floor(stats.systemUptime || 0);
-      const hours = Math.floor(upSec / 3600);
-      const mins = Math.floor((upSec % 3600) / 60);
-      dom.adminDiagUptime.textContent = `${hours}h ${mins}m`;
+      const uptimeVal = stats.systemUptime != null ? stats.systemUptime : stats.uptimeSeconds;
+      if (uptimeVal != null && !isNaN(Number(uptimeVal))) {
+        const upSec = Math.floor(Number(uptimeVal) || 0);
+        const hours = Math.floor(upSec / 3600);
+        const mins = Math.floor((upSec % 3600) / 60);
+        dom.adminDiagUptime.textContent = `${hours}h ${mins}m`;
+      } else {
+        dom.adminDiagUptime.textContent = '—';
+      }
     }
   } catch (err) {
     console.warn('Failed to fetch admin stats:', err);
@@ -3924,8 +3969,9 @@ function renderAdminMessagesList() {
       const roomId = btn.getAttribute('data-room-id');
       if (!confirm('Are you sure you want to delete this message?')) return;
       try {
-        await callAdminApi(`/api/admin/messages/${msgId}?roomId=${roomId}`, {
-          method: 'DELETE'
+        await callAdminApi('/api/admin/messages/delete', {
+          method: 'POST',
+          body: { roomId, messageId: msgId }
         });
         fetchAdminMessages();
       } catch (err) {
@@ -3950,8 +3996,9 @@ async function adminTogglePinMessage(messageId, pinned) {
 async function adminDeleteMessage(messageId) {
   if (!confirm('Delete this message from chat?')) return;
   try {
-    await callAdminApi(`/api/admin/messages/${messageId}?roomId=${state.currentRoom}`, {
-      method: 'DELETE'
+    await callAdminApi('/api/admin/messages/delete', {
+      method: 'POST',
+      body: { roomId: state.currentRoom, messageId }
     });
   } catch (err) {
     alert(`Failed to delete message: ${err.message}`);
@@ -3982,21 +4029,37 @@ function updateAdminBroadcastTabUI(broadcast) {
   if (!dom.adminActiveBroadcastStatus) return;
 
   if (broadcast && broadcast.message) {
+    const priority = broadcast.priority || 'info';
+    let badgeColor = 'bg-indigo-950 text-indigo-300 border-indigo-500/40';
+    let priorityLabel = 'INFORMATION';
+
+    if (priority === 'critical' || priority === 'urgent') {
+      badgeColor = 'bg-rose-950 text-rose-300 border-rose-500/40';
+      priorityLabel = 'URGENT ALERT';
+    } else if (priority === 'warning') {
+      badgeColor = 'bg-amber-950 text-amber-300 border-amber-500/40';
+      priorityLabel = 'WARNING NOTICE';
+    } else if (priority === 'celebration') {
+      badgeColor = 'bg-emerald-950 text-emerald-300 border-emerald-500/40';
+      priorityLabel = 'CELEBRATION';
+    }
+
     if (dom.adminBroadcastStatusPill) {
       dom.adminBroadcastStatusPill.textContent = 'ACTIVE';
       dom.adminBroadcastStatusPill.className = 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40 animate-pulse';
     }
     if (dom.adminActiveBroadcastContent) {
       dom.adminActiveBroadcastContent.innerHTML = `
-        <div class="font-semibold text-slate-200 text-sm mb-0.5">${escapeHtml(broadcast.title || 'Campus Broadcast')}</div>
+        <div class="font-semibold text-slate-200 text-sm mb-0.5">${escapeHtml(broadcast.title || 'Campus Announcement')}</div>
         <p class="text-xs text-slate-300 mb-2">${escapeHtml(broadcast.message)}</p>
-        <div class="flex items-center gap-3 text-[10px] text-slate-500 font-mono">
-          <span>Priority: <strong class="uppercase ${broadcast.priority === 'critical' ? 'text-red-400' : broadcast.priority === 'urgent' ? 'text-amber-400' : 'text-indigo-400'}">${broadcast.priority || 'normal'}</strong></span>
-          <span>By: ${escapeHtml(broadcast.author?.name || 'Staff')}</span>
+        <div class="flex items-center gap-3 text-[10px] text-slate-400 font-mono">
+          <span>Priority: <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${badgeColor}">${priorityLabel}</span></span>
+          <span>By: <strong class="text-slate-300">${escapeHtml(broadcast.author?.name || broadcast.authorName || 'Staff')}</strong></span>
         </div>
       `;
     }
     if (dom.btnClearActiveBroadcast) dom.btnClearActiveBroadcast.classList.remove('hidden');
+    if (dom.adminActiveBroadcastActions) dom.adminActiveBroadcastActions.classList.remove('hidden');
   } else {
     if (dom.adminBroadcastStatusPill) {
       dom.adminBroadcastStatusPill.textContent = 'INACTIVE';
@@ -4008,35 +4071,46 @@ function updateAdminBroadcastTabUI(broadcast) {
       `;
     }
     if (dom.btnClearActiveBroadcast) dom.btnClearActiveBroadcast.classList.add('hidden');
+    if (dom.adminActiveBroadcastActions) dom.adminActiveBroadcastActions.classList.add('hidden');
   }
 }
 
 function updateBroadcastLivePreview() {
   const title = dom.inputBroadcastTitle ? dom.inputBroadcastTitle.value.trim() : '';
-  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'normal';
+  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'info';
   const message = dom.inputBroadcastMessage ? dom.inputBroadcastMessage.value.trim() : '';
 
-  if (dom.previewBroadcastTitle) dom.previewBroadcastTitle.textContent = title || 'Announcement Title';
-  if (dom.previewBroadcastMessage) dom.previewBroadcastMessage.textContent = message || 'Your broadcast message preview will appear here...';
+  if (dom.previewBroadcastTitle) dom.previewBroadcastTitle.textContent = title ? `${title}:` : 'Announcement Title:';
+  if (dom.previewBroadcastMessage) dom.previewBroadcastMessage.textContent = message || 'Your announcement preview will appear here...';
 
   if (dom.previewPriorityIcon) {
-    dom.previewPriorityIcon.textContent = priority === 'critical' ? '🚨' : priority === 'urgent' ? '⚡' : '📢';
+    if (priority === 'critical' || priority === 'urgent') {
+      dom.previewPriorityIcon.textContent = '🚨';
+    } else if (priority === 'warning') {
+      dom.previewPriorityIcon.textContent = '⚠️';
+    } else if (priority === 'celebration') {
+      dom.previewPriorityIcon.textContent = '🎉';
+    } else {
+      dom.previewPriorityIcon.textContent = '📢';
+    }
   }
 
   if (dom.broadcastPreviewBox) {
-    if (priority === 'critical') {
-      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-red-950/40 border border-red-500/50 flex items-start gap-2.5';
-    } else if (priority === 'urgent') {
-      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-amber-950/40 border border-amber-500/50 flex items-start gap-2.5';
+    if (priority === 'critical' || priority === 'urgent') {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-red-950/40 border border-red-500/50 flex items-start gap-2.5 text-red-100 shadow-md transition-all';
+    } else if (priority === 'warning') {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-amber-950/40 border border-amber-500/50 flex items-start gap-2.5 text-amber-100 shadow-md transition-all';
+    } else if (priority === 'celebration') {
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-emerald-950/40 border border-emerald-500/50 flex items-start gap-2.5 text-emerald-100 shadow-md transition-all';
     } else {
-      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-indigo-950/40 border border-indigo-500/50 flex items-start gap-2.5';
+      dom.broadcastPreviewBox.className = 'rounded-xl p-3 bg-indigo-950/40 border border-indigo-500/50 flex items-start gap-2.5 text-indigo-100 shadow-md transition-all';
     }
   }
 }
 
 async function handlePublishBroadcastSubmit() {
   const title = dom.inputBroadcastTitle ? dom.inputBroadcastTitle.value.trim() : '';
-  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'normal';
+  const priority = dom.inputBroadcastPriority ? dom.inputBroadcastPriority.value : 'info';
   const message = dom.inputBroadcastMessage ? dom.inputBroadcastMessage.value.trim() : '';
 
   if (!message) {
@@ -4044,25 +4118,51 @@ async function handlePublishBroadcastSubmit() {
     return;
   }
 
+  const broadcastData = {
+    title: title || 'Campus Notice',
+    priority,
+    message,
+    createdAt: Date.now(),
+    author: {
+      uid: state.currentUser?.uid || 'staff',
+      name: state.currentUser?.displayName || 'Campus Administration'
+    },
+    authorName: state.currentUser?.displayName || 'Campus Administration'
+  };
+
+  // Socket.IO emit event that pushes announcement data to the server
+  if (state.socket && state.socket.connected) {
+    state.socket.emit('broadcast-message', broadcastData);
+  }
+
   try {
-    await callAdminApi('/api/admin/broadcast/set', {
+    await callAdminApi('/api/admin/broadcast', {
       method: 'POST',
-      body: { title: title || 'Campus Notice', priority, message }
+      body: broadcastData
     });
     alert('Announcement broadcasted to all connected students in real-time!');
     if (dom.inputBroadcastTitle) dom.inputBroadcastTitle.value = '';
     if (dom.inputBroadcastMessage) dom.inputBroadcastMessage.value = '';
+    updateBroadcastLivePreview();
     fetchAdminBroadcast();
   } catch (err) {
-    alert(`Failed to publish broadcast: ${err.message}`);
+    console.warn('API broadcast fallback:', err.message);
+    fetchAdminBroadcast();
   }
 }
 
 async function handleClearBroadcastSubmit() {
   if (!confirm('Are you sure you want to dismiss and clear the active broadcast banner across campus?')) return;
+
+  // Socket.IO emit event to clear broadcast across all clients
+  if (state.socket && state.socket.connected) {
+    state.socket.emit('broadcast-message', { active: false });
+  }
+
   try {
-    await callAdminApi('/api/admin/broadcast/clear', {
-      method: 'POST'
+    await callAdminApi('/api/admin/broadcast', {
+      method: 'POST',
+      body: { active: false }
     });
     fetchAdminBroadcast();
   } catch (err) {

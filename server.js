@@ -809,9 +809,12 @@ app.get('/api/admin/overview', requireStaffAuth, (req, res) => {
     stats: {
       totalMembers: Math.max(savedProfiles.size, activeUsers.size, 1),
       activeOnline: activeUsers.size,
+      onlineMembers: activeUsers.size,
       totalMessages: totalMessagesCount,
       channelsCount: CHANNELS.length,
+      totalChannels: CHANNELS.length,
       uptimeSeconds: Math.floor(process.uptime()),
+      systemUptime: Math.floor(process.uptime()),
       mutedCount: mutedUsers.size,
       bannedCount: bannedUsers.size,
       firebaseReady: isFirebaseAdminReady,
@@ -1017,6 +1020,24 @@ app.post('/api/admin/members/ban', requireAdminAuth, async (req, res) => {
   }
 });
 
+// 6B. Channel Management: Fetch Channels with Telemetry
+app.get('/api/admin/channels', requireStaffAuth, (req, res) => {
+  const channelsWithStats = CHANNELS.map(ch => {
+    const msgs = roomHistories.get(ch.id) || [];
+    let occupants = 0;
+    activeUsers.forEach(u => {
+      if (u.currentRoom === ch.id) occupants++;
+    });
+    return {
+      ...ch,
+      messageCount: msgs.length,
+      occupantsCount: occupants,
+      isLocked: Boolean(ch.isLocked)
+    };
+  });
+  res.json({ channels: channelsWithStats });
+});
+
 // 7. Channel Management: Create New Channel
 app.post('/api/admin/channels/create', requireStaffAuth, async (req, res) => {
   try {
@@ -1148,9 +1169,9 @@ app.post('/api/admin/channels/purge', requireAdminAuth, async (req, res) => {
 });
 
 // 11. Channel Management: Delete Custom Channel
-app.delete('/api/admin/channels/:channelId', requireAdminAuth, async (req, res) => {
+const handleDeleteChannel = async (req, res) => {
   try {
-    const { channelId } = req.params;
+    const channelId = req.params?.channelId || req.body?.channelId || req.query?.channelId;
     if (!channelId) return res.status(400).json({ error: 'channelId is required' });
     if (channelId === 'general') {
       return res.status(400).json({ error: 'Cannot delete the default #general channel' });
@@ -1177,7 +1198,11 @@ app.delete('/api/admin/channels/:channelId', requireAdminAuth, async (req, res) 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.delete('/api/admin/channels/:channelId', requireAdminAuth, handleDeleteChannel);
+app.delete('/api/admin/channels/delete', requireAdminAuth, handleDeleteChannel);
+app.post('/api/admin/channels/delete', requireAdminAuth, handleDeleteChannel);
 
 // 11.5 Campus Lockdown (Lock all channels)
 app.post('/api/admin/campus/lockdown', requireAdminAuth, async (req, res) => {
@@ -1218,6 +1243,7 @@ app.post('/api/admin/campus/lockdown', requireAdminAuth, async (req, res) => {
       timestamp: Date.now()
     };
     activeSystemBroadcast = broadcast;
+    io.emit('broadcast-message', broadcast);
     io.emit('admin:system_broadcast', broadcast);
 
     res.json({ success: true, lockedChannels: lockCount });
@@ -1260,6 +1286,7 @@ app.post('/api/admin/campus/unlock', requireAdminAuth, async (req, res) => {
     // Clear broadcast if it's the lockdown one
     if (activeSystemBroadcast && activeSystemBroadcast.title === 'CAMPUS LOCKDOWN') {
       activeSystemBroadcast = null;
+      io.emit('broadcast-message', null);
       io.emit('admin:system_broadcast', null);
     } else {
       // Just announce it's lifted
@@ -1270,6 +1297,7 @@ app.post('/api/admin/campus/unlock', requireAdminAuth, async (req, res) => {
         timestamp: Date.now()
       };
       activeSystemBroadcast = broadcast;
+      io.emit('broadcast-message', broadcast);
       io.emit('admin:system_broadcast', broadcast);
     }
 
@@ -1309,10 +1337,10 @@ app.get('/api/admin/messages', requireStaffAuth, (req, res) => {
 });
 
 // 13. Message Moderation: Delete Violating Message
-app.delete('/api/admin/messages/:messageId', requireStaffAuth, async (req, res) => {
+const handleDeleteAdminMessage = async (req, res) => {
   try {
-    const { messageId } = req.params;
-    const { roomId } = req.query;
+    const messageId = req.params?.messageId || req.body?.messageId || req.query?.messageId;
+    const roomId = req.body?.roomId || req.query?.roomId;
     if (!messageId) return res.status(400).json({ error: 'messageId is required' });
 
     const targetRoomId = await deleteMessage(messageId, roomId);
@@ -1324,7 +1352,11 @@ app.delete('/api/admin/messages/:messageId', requireStaffAuth, async (req, res) 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.post('/api/admin/messages/delete', requireStaffAuth, handleDeleteAdminMessage);
+app.delete('/api/admin/messages/delete', requireStaffAuth, handleDeleteAdminMessage);
+app.delete('/api/admin/messages/:messageId', requireStaffAuth, handleDeleteAdminMessage);
 
 // 14. Message Moderation: Pin / Unpin Announcement Message
 app.post('/api/admin/messages/pin', requireStaffAuth, async (req, res) => {
@@ -1356,9 +1388,9 @@ app.post('/api/admin/messages/pin', requireStaffAuth, async (req, res) => {
 });
 
 // 15. Campus Announcement System Broadcast
-app.post('/api/admin/broadcast', requireStaffAuth, async (req, res) => {
+const handleAdminBroadcast = async (req, res) => {
   try {
-    const { title, message, priority, active } = req.body;
+    const { title, message, priority, active } = req.body || {};
 
     if (active === false) {
       activeSystemBroadcast = null;
@@ -1371,25 +1403,51 @@ app.post('/api/admin/broadcast', requireStaffAuth, async (req, res) => {
       return res.status(400).json({ error: 'Broadcast message body is required' });
     }
 
+    const priorityVal = ['info', 'warning', 'urgent', 'celebration', 'critical'].includes(priority) ? priority : 'info';
     activeSystemBroadcast = {
       id: `bc_${Date.now()}`,
-      title: (title && typeof title === 'string') ? title.trim() : 'Official Campus Announcement',
+      title: (title && typeof title === 'string' && title.trim()) ? title.trim() : 'Official Campus Announcement',
       message: message.trim(),
-      priority: ['info', 'warning', 'urgent', 'celebration'].includes(priority) ? priority : 'info',
+      priority: priorityVal,
       createdAt: Date.now(),
+      author: {
+        uid: req.staffUser?.uid || 'staff',
+        name: req.staffUser?.name || 'Campus Administration'
+      },
       authorName: req.staffUser?.name || 'Campus Administration'
     };
 
     await recordAuditLog('SEND_BROADCAST', req.staffUser, `Published broadcast: "${activeSystemBroadcast.title}" (${activeSystemBroadcast.priority.toUpperCase()})`);
+    io.emit('broadcast-message', activeSystemBroadcast);
     io.emit('admin:system_broadcast', activeSystemBroadcast);
 
     res.json({ success: true, broadcast: activeSystemBroadcast });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+};
+
+app.get('/api/admin/broadcast', requireStaffAuth, (req, res) => {
+  res.json({ broadcast: activeSystemBroadcast });
+});
+app.post('/api/admin/broadcast', requireStaffAuth, handleAdminBroadcast);
+app.post('/api/admin/broadcast/set', requireStaffAuth, handleAdminBroadcast);
+app.post('/api/admin/broadcast/clear', requireStaffAuth, async (req, res) => {
+  try {
+    activeSystemBroadcast = null;
+    await recordAuditLog('CLEAR_BROADCAST', req.staffUser, 'Cleared active campus broadcast banner');
+    io.emit('broadcast-message', null);
+    io.emit('admin:system_broadcast', null);
+    res.json({ success: true, broadcast: null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 16. Audit Log History
+app.get('/api/admin/audit', requireStaffAuth, (req, res) => {
+  res.json({ auditLogs });
+});
 app.get('/api/admin/audit-logs', requireStaffAuth, (req, res) => {
   res.json({ auditLogs });
 });
@@ -1507,6 +1565,7 @@ io.on('connection', async (socket) => {
 
   // Sync any active campus announcement broadcast
   if (activeSystemBroadcast) {
+    socket.emit('broadcast-message', activeSystemBroadcast);
     socket.emit('admin:system_broadcast', activeSystemBroadcast);
   }
 
@@ -1888,6 +1947,52 @@ io.on('connection', async (socket) => {
     if (userProfile) {
       userProfile.status = status;
       io.emit('users:presence', getOnlineUsersList());
+    }
+  });
+
+  // ------------------------------------------
+  // EVENT: broadcast-message (Admin Announcement Broadcast)
+  // ------------------------------------------
+  socket.on('broadcast-message', async (data) => {
+    try {
+      if (!isUserStaff(socket.user?.uid, socket.user?.email)) {
+        return socket.emit('error', { message: 'Permission denied: Staff privileges required to broadcast.' });
+      }
+
+      const { title, message, priority, active } = data || {};
+
+      if (active === false) {
+        activeSystemBroadcast = null;
+        await recordAuditLog('CLEAR_BROADCAST', socket.user, 'Cleared active campus broadcast banner');
+        io.emit('broadcast-message', null);
+        io.emit('admin:system_broadcast', null);
+        return;
+      }
+
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        return socket.emit('error', { message: 'Broadcast message body is required' });
+      }
+
+      const priorityVal = ['info', 'warning', 'urgent', 'celebration', 'critical'].includes(priority) ? priority : 'info';
+      activeSystemBroadcast = {
+        id: `bc_${Date.now()}`,
+        title: (title && typeof title === 'string' && title.trim()) ? title.trim() : 'Official Campus Announcement',
+        message: message.trim(),
+        priority: priorityVal,
+        createdAt: Date.now(),
+        author: {
+          uid: socket.user?.uid || 'staff',
+          name: socket.user?.name || 'Campus Administration'
+        },
+        authorName: socket.user?.name || 'Campus Administration'
+      };
+
+      await recordAuditLog('SEND_BROADCAST', socket.user, `Published broadcast: "${activeSystemBroadcast.title}" (${activeSystemBroadcast.priority.toUpperCase()})`);
+      io.emit('broadcast-message', activeSystemBroadcast);
+      io.emit('admin:system_broadcast', activeSystemBroadcast);
+    } catch (err) {
+      console.error('Error handling broadcast-message socket event:', err);
+      socket.emit('error', { message: err.message });
     }
   });
 
