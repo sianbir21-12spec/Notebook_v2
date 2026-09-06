@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>School Friend Group Chat</title>
-  <meta name="description" content="Real-time web chat application for school friend groups with Express, Socket.IO channels, typing indicators, presence tracking, camera photo capture, customizable themes (Midnight, Ocean, Forest), and Firebase Authentication." />
+  <meta name="description" content="Real-time web chat application for school friend groups with Express, Socket.IO channels, service worker browser push notifications for background and inactive channel alerts, typing indicators, presence tracking, camera photo capture, customizable themes, and Firebase Authentication." />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="apple-touch-icon" href="https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff&size=192" />
   
   <!-- Tailwind CSS Configuration & Console Advisory Handler -->
   <script>
@@ -640,6 +643,13 @@
             Socket.IO &amp; Firestore
           </span>
 
+          <!-- Browser Push Notifications Permission & Status Button -->
+          <button id="btn-toggle-notifications" type="button" title="Push Notifications (Click to enable or test)" class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/60 transition cursor-pointer shadow-sm">
+            <span id="notif-icon">🔔</span>
+            <span id="notif-status-text" class="hidden sm:inline">Notifications</span>
+            <span id="notif-indicator-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+          </button>
+
           <!-- Quick Theme Switcher Button (Opens Settings Modal) -->
           <button id="btn-quick-theme-toggle" type="button" title="Change Theme (Settings)" class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/60 transition cursor-pointer shadow-sm">
             <span id="current-theme-icon" class="text-sm">🌙</span>
@@ -665,6 +675,33 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
+      </div>
+
+      <!-- Browser Push Notification Permission Request Banner -->
+      <div id="notification-permission-banner" class="hidden px-4 py-3 bg-gradient-to-r from-indigo-950/95 via-slate-900/95 to-indigo-900/90 border-b border-indigo-700/60 text-indigo-100 items-center justify-between gap-3 text-xs backdrop-blur-md shadow-md animate-slide-in-up">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-8 h-8 rounded-xl bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center text-base flex-shrink-0">
+            🔔
+          </div>
+          <div class="min-w-0">
+            <div class="font-bold text-white flex items-center gap-2">
+              <span>Enable Browser Push Notifications</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Background &amp; Inactive Channels</span>
+            </div>
+            <p class="text-slate-300 text-[11px] mt-0.5">Stay updated with messages from your friends even when working in other tabs or channels.</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <button id="btn-banner-enable-notifs" type="button" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-md shadow-indigo-600/30 transition cursor-pointer flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+            <span>Enable Notifications</span>
+          </button>
+          <button id="btn-banner-dismiss-notifs" type="button" class="px-2.5 py-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800/80 transition cursor-pointer text-xs">
+            Dismiss
+          </button>
+        </div>
       </div>
 
       <!-- Scrollable Message Stream Container -->
@@ -913,6 +950,67 @@
                 <span class="w-4 h-3.5 rounded bg-[#0a291b] border border-[#174d35] shadow-inner" title="Spruce moss surface"></span>
                 <span class="w-4 h-3.5 rounded bg-emerald-500 shadow-inner" title="Emerald accent"></span>
               </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Browser Push Notifications Configuration Card -->
+        <div class="p-4 bg-slate-950/80 rounded-xl border border-slate-800 space-y-3.5">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center text-sm">
+                🔔
+              </div>
+              <div>
+                <div class="text-xs font-bold text-white uppercase tracking-wider">Browser Push Notifications</div>
+                <div class="text-[11px] text-slate-400">Background and inactive channel alerts via Service Worker</div>
+              </div>
+            </div>
+            <span id="settings-notif-status-badge" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30 font-mono">Checking...</span>
+          </div>
+
+          <p class="text-[11px] text-slate-300">
+            Receive native browser push notifications when classmates post in rooms you aren't currently viewing, or when CampusConnect is running in the background or minimized.
+          </p>
+
+          <!-- Notification Toggles -->
+          <div class="space-y-2 pt-1 border-t border-slate-800/80">
+            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:text-white select-none">
+              <span class="flex items-center gap-2">
+                <span>💬</span>
+                <span>Notify for inactive channels</span>
+              </span>
+              <input type="checkbox" id="pref-notif-inactive-channels" checked class="w-4 h-4 rounded text-indigo-600 bg-slate-900 border-slate-700 focus:ring-indigo-500 cursor-pointer" />
+            </label>
+
+            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:text-white select-none">
+              <span class="flex items-center gap-2">
+                <span>🪟</span>
+                <span>Notify when app is in background / other tabs</span>
+              </span>
+              <input type="checkbox" id="pref-notif-background" checked class="w-4 h-4 rounded text-indigo-600 bg-slate-900 border-slate-700 focus:ring-indigo-500 cursor-pointer" />
+            </label>
+
+            <label class="flex items-center justify-between text-xs text-slate-300 cursor-pointer hover:text-white select-none">
+              <span class="flex items-center gap-2">
+                <span>🔊</span>
+                <span>Play subtle notification sound</span>
+              </span>
+              <input type="checkbox" id="pref-notif-sound" checked class="w-4 h-4 rounded text-indigo-600 bg-slate-900 border-slate-700 focus:ring-indigo-500 cursor-pointer" />
+            </label>
+          </div>
+
+          <!-- Notification Action Buttons -->
+          <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80">
+            <button id="btn-settings-request-notifs" type="button" class="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-sm">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              <span>Enable Browser Permissions</span>
+            </button>
+            <button id="btn-settings-test-notif" type="button" class="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition cursor-pointer flex items-center gap-1.5">
+              <span>🚀</span>
+              <span>Send Test Notification</span>
             </button>
           </div>
         </div>

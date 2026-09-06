@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import webpush from 'web-push';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -1453,6 +1454,219 @@ app.get('/api/admin/audit-logs', requireStaffAuth, (req, res) => {
 });
 
 // ==========================================
+// 3.5. WEB PUSH NOTIFICATIONS (SERVICE WORKERS)
+// ==========================================
+
+// Configure VAPID keys for browser push notifications
+let vapidKeys = {
+  publicKey: process.env.VAPID_PUBLIC_KEY,
+  privateKey: process.env.VAPID_PRIVATE_KEY
+};
+
+if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+  try {
+    vapidKeys = webpush.generateVAPIDKeys();
+    console.log('🔑 [Web Push] Generated VAPID Keys for browser push notifications.');
+  } catch (vapidErr) {
+    console.warn('⚠️ [Web Push] Could not generate VAPID keys:', vapidErr.message);
+  }
+}
+
+if (vapidKeys.publicKey && vapidKeys.privateKey) {
+  try {
+    webpush.setVapidDetails(
+      'mailto:campusconnect@school.internal',
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+    console.log('✅ [Web Push] VAPID details configured successfully.');
+  } catch (err) {
+    console.warn('⚠️ [Web Push] Failed to set VAPID details:', err.message);
+  }
+}
+
+// Map: userId -> Map<endpoint, pushSubscription>
+const userPushSubscriptions = new Map();
+
+// Helper to save push subscription for a user
+function saveUserPushSubscription(uid, subscription) {
+  if (!uid || !subscription || !subscription.endpoint) return;
+  if (!userPushSubscriptions.has(uid)) {
+    userPushSubscriptions.set(uid, new Map());
+  }
+  userPushSubscriptions.get(uid).set(subscription.endpoint, subscription);
+  console.log(`📱 [Web Push] Registered device for user ${uid} (Total devices: ${userPushSubscriptions.get(uid).size})`);
+}
+
+// Helper to remove push subscription
+function removeUserPushSubscription(uid, endpoint) {
+  if (userPushSubscriptions.has(uid)) {
+    userPushSubscriptions.get(uid).delete(endpoint);
+    if (userPushSubscriptions.get(uid).size === 0) {
+      userPushSubscriptions.delete(uid);
+    }
+  }
+}
+
+// Dispatch push notifications to users not currently viewing the active room or in the background
+async function dispatchPushNotificationsForMessage(messageObj) {
+  const { roomId, sender, content, image } = messageObj;
+  const isDM = roomId.startsWith('dm_');
+  const channelObj = CHANNELS.find(c => c.id === roomId);
+  const channelName = isDM ? 'Direct Message' : (channelObj?.name || `#${roomId}`);
+
+  let title = `${sender?.name || 'Classmate'} in ${channelName}`;
+  if (isDM) {
+    title = `💬 ${sender?.name || 'Classmate'}`;
+  }
+
+  let body = content || (image ? '📷 Sent a photo' : 'Sent a message');
+  if (body.length > 120) {
+    body = body.slice(0, 117) + '...';
+  }
+
+  const payload = JSON.stringify({
+    title,
+    body,
+    icon: sender?.avatar || sender?.picture || 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff',
+    badge: 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff',
+    roomId,
+    isDM,
+    targetUid: sender?.uid,
+    tag: `campus-msg-${roomId}`,
+    timestamp: messageObj.timestamp || Date.now()
+  });
+
+  // Identify eligible recipients
+  let targetUids = [];
+
+  if (isDM) {
+    const parts = roomId.replace('dm_', '').split('_');
+    const recipientUid = parts.find(id => id !== sender?.uid);
+    if (recipientUid) {
+      const activeUser = activeUsers.get(recipientUid);
+      const isViewingActive = activeUser && activeUser.currentRoom === roomId && !activeUser.isBackground;
+      if (!isViewingActive) {
+        targetUids.push(recipientUid);
+      }
+    }
+  } else {
+    // For school channels: all registered users who are NOT currently in this room or are backgrounded
+    for (const [uid] of userPushSubscriptions.entries()) {
+      if (uid !== sender?.uid) {
+        const activeUser = activeUsers.get(uid);
+        const isViewingActive = activeUser && activeUser.currentRoom === roomId && !activeUser.isBackground;
+        if (!isViewingActive) {
+          targetUids.push(uid);
+        }
+      }
+    }
+  }
+
+  // Send push notification to target devices
+  for (const uid of targetUids) {
+    const subs = userPushSubscriptions.get(uid);
+    if (!subs || subs.size === 0) continue;
+
+    for (const [endpoint, subscription] of subs.entries()) {
+      try {
+        await webpush.sendNotification(subscription, payload, { TTL: 60 });
+      } catch (err) {
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          console.log(`📱 [Web Push] Expired subscription removed for user ${uid}`);
+          subs.delete(endpoint);
+        } else {
+          console.warn(`⚠️ [Web Push] Delivery warning for user ${uid}:`, err.message);
+        }
+      }
+    }
+  }
+}
+
+// 17. Push Notifications Endpoints
+app.get('/api/push/vapid-public-key', (req, res) => {
+  res.json({
+    publicKey: vapidKeys.publicKey || null,
+    enabled: Boolean(vapidKeys.publicKey && vapidKeys.privateKey)
+  });
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    const { subscription, uid } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: 'Valid push subscription object required' });
+    }
+
+    let targetUid = uid;
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      try {
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        const decoded = await verifyAuthToken(token);
+        if (decoded?.uid) targetUid = decoded.uid;
+      } catch (e) {}
+    }
+
+    if (!targetUid) {
+      return res.status(400).json({ error: 'User UID is required' });
+    }
+
+    saveUserPushSubscription(targetUid, subscription);
+    res.json({ success: true, message: 'Push subscription saved' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  try {
+    const { endpoint, uid } = req.body || {};
+    if (uid && endpoint) {
+      removeUserPushSubscription(uid, endpoint);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const { uid, subscription } = req.body || {};
+    const testPayload = JSON.stringify({
+      title: '🔔 School Friend Group Chat',
+      body: 'Push notifications are active! You will receive alerts for new messages when in other channels or in the background.',
+      icon: 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff',
+      badge: 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff',
+      roomId: 'general',
+      isDM: false,
+      tag: 'test-push-notification',
+      timestamp: Date.now()
+    });
+
+    if (subscription && subscription.endpoint) {
+      await webpush.sendNotification(subscription, testPayload, { TTL: 30 });
+      return res.json({ success: true, message: 'Test notification sent directly to subscription endpoint' });
+    }
+
+    if (uid && userPushSubscriptions.has(uid)) {
+      const subs = userPushSubscriptions.get(uid);
+      for (const sub of subs.values()) {
+        try {
+          await webpush.sendNotification(sub, testPayload, { TTL: 30 });
+        } catch (e) {}
+      }
+      return res.json({ success: true, message: 'Test notification delivered to user registered devices' });
+    }
+
+    res.status(400).json({ error: 'No subscription or active user found for test notification' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
 // 4. SOCKET.IO SETUP & AUTHENTICATION
 // ==========================================
 const io = new Server(server, {
@@ -1699,6 +1913,16 @@ io.on('connection', async (socket) => {
   });
 
   // ------------------------------------------
+  // EVENT: user:visibility_state (Background / Foreground tracking)
+  // ------------------------------------------
+  socket.on('user:visibility_state', ({ isBackground }) => {
+    const userProfile = activeUsers.get(uid);
+    if (userProfile) {
+      userProfile.isBackground = Boolean(isBackground);
+    }
+  });
+
+  // ------------------------------------------
   // EVENT: message:send
   // ------------------------------------------
   socket.on('message:send', async (data) => {
@@ -1800,7 +2024,12 @@ io.on('connection', async (socket) => {
       }
     }
 
-    // 4. Asynchronously persist to Firestore in the background (non-blocking)
+    // 4. Dispatch browser push notifications to users outside this channel or in background
+    dispatchPushNotificationsForMessage(messageObj).catch(err => {
+      console.warn('⚠️ [Web Push] Dispatch notification error:', err.message);
+    });
+
+    // 5. Asynchronously persist to Firestore in the background (non-blocking)
     saveMessageToFirestore(messageObj).catch(err => {
       handleFirestoreError(err, `Async Firestore save message ${messageObj.id}`);
     });

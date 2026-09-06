@@ -89,6 +89,17 @@ const state = {
     messages: [],
     auditLogs: [],
     stats: null
+  },
+
+  // Browser Push Notifications & Service Worker State
+  pushNotification: {
+    permission: (typeof Notification !== 'undefined') ? Notification.permission : 'unsupported',
+    swRegistration: null,
+    subscription: null,
+    bannerDismissed: localStorage.getItem('campusconnect_notif_banner_dismissed') === 'true',
+    prefInactiveChannels: localStorage.getItem('campusconnect_notif_inactive') !== 'false',
+    prefBackground: localStorage.getItem('campusconnect_notif_bg') !== 'false',
+    prefSound: localStorage.getItem('campusconnect_notif_sound') !== 'false'
   }
 };
 
@@ -313,7 +324,22 @@ const dom = {
   // Admin Tab: Audit Log
   btnRefreshAudit: document.getElementById('btn-refresh-audit'),
   adminAuditStream: document.getElementById('admin-audit-stream'),
-  adminAuditEmpty: document.getElementById('admin-audit-empty')
+  adminAuditEmpty: document.getElementById('admin-audit-empty'),
+
+  // Browser Push Notifications Elements
+  btnToggleNotifications: document.getElementById('btn-toggle-notifications'),
+  notifIcon: document.getElementById('notif-icon'),
+  notifStatusText: document.getElementById('notif-status-text'),
+  notifIndicatorDot: document.getElementById('notif-indicator-dot'),
+  notificationPermissionBanner: document.getElementById('notification-permission-banner'),
+  btnBannerEnableNotifs: document.getElementById('btn-banner-enable-notifs'),
+  btnBannerDismissNotifs: document.getElementById('btn-banner-dismiss-notifs'),
+  settingsNotifStatusBadge: document.getElementById('settings-notif-status-badge'),
+  btnSettingsRequestNotifs: document.getElementById('btn-settings-request-notifs'),
+  btnSettingsTestNotif: document.getElementById('btn-settings-test-notif'),
+  prefNotifInactiveChannels: document.getElementById('pref-notif-inactive-channels'),
+  prefNotifBackground: document.getElementById('pref-notif-background'),
+  prefNotifSound: document.getElementById('pref-notif-sound')
 };
 
 // ==================================================================
@@ -595,6 +621,12 @@ function handleUserLoggedIn(userProfile, token) {
   // Render initial channel tabs
   renderChannelsList();
 
+  // Update Push Notifications UI & banner after login
+  updatePushNotificationUI();
+  if (state.pushNotification.swRegistration) {
+    subscribeDeviceToPushNotifications(state.pushNotification.swRegistration).catch(() => {});
+  }
+
   // Initialize Socket.IO connection
   connectSocket(token, userProfile);
 }
@@ -609,6 +641,11 @@ function handleUserLoggedOut() {
   state.roomCaches = {};
   cleanupMessageIntersectionObserver();
   
+  if (dom.notificationPermissionBanner) {
+    dom.notificationPermissionBanner.classList.add('hidden');
+    dom.notificationPermissionBanner.classList.remove('flex');
+  }
+
   dom.chatView.classList.add('hidden');
   dom.authView.classList.remove('hidden');
   dom.messagesContainer.innerHTML = '';
@@ -814,6 +851,9 @@ function connectSocket(token, userProfile) {
       scrollToBottom();
       checkAndMarkMessagesRead();
 
+      // Trigger browser push notification if app is in background or minimized
+      triggerBrowserNotificationIfEligible(message, state.isDirectMessage);
+
       // Mention notification
       const isFromMe = state.currentUser && message.sender && message.sender.uid === state.currentUser.uid;
       if (!isFromMe && state.currentUser?.name && message.content && message.content.toLowerCase().includes(`@${state.currentUser.name.toLowerCase()}`)) {
@@ -840,6 +880,7 @@ function connectSocket(token, userProfile) {
         }
         renderDirectMessagesList();
         updateDocumentTitleWithUnreads();
+        triggerBrowserNotificationIfEligible(message, true);
       } else {
         // Increment unread count for school channel if sent by someone else
         if (!state.roomCaches[message.roomId]) {
@@ -854,6 +895,7 @@ function connectSocket(token, userProfile) {
           state.unreadCounts[message.roomId] = (state.unreadCounts[message.roomId] || 0) + 1;
           renderChannelsList();
           updateDocumentTitleWithUnreads();
+          triggerBrowserNotificationIfEligible(message, false);
 
           // Mention notification from another channel
           if (state.currentUser?.name && message.content && message.content.toLowerCase().includes(`@${state.currentUser.name.toLowerCase()}`)) {
@@ -1094,6 +1136,9 @@ function connectSocket(token, userProfile) {
       dm.unreadCount = (dm.unreadCount || 0) + 1;
     }
     renderDirectMessagesList();
+    if (message) {
+      triggerBrowserNotificationIfEligible(message, true);
+    }
   });
 
   // Typing Indicator event from server
@@ -4408,6 +4453,511 @@ function initAdminConsoleListeners() {
   }
 }
 
+// ==================================================================
+// 16. BROWSER PUSH NOTIFICATIONS & SERVICE WORKER INTEGRATION
+// ==================================================================
+
+/**
+ * Converts a URL-safe Base64 string to a Uint8Array for VAPID push key registration
+ */
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding)
+    .replace(/\-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+/**
+ * Registers the Service Worker for push notifications & background handling
+ */
+async function registerPushServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    console.warn('⚠️ [Push Notifications] Service Workers not supported in this browser.');
+    return null;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    state.pushNotification.swRegistration = registration;
+    console.log('✅ [Service Worker] Registered successfully with scope:', registration.scope);
+
+    // If permission is already granted, attempt automatic subscription with the server
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      subscribeDeviceToPushNotifications(registration).catch(err => {
+        console.warn('⚠️ [Push Notifications] Auto-subscription error:', err);
+      });
+    }
+
+    return registration;
+  } catch (error) {
+    console.warn('⚠️ [Service Worker] Registration failed:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Subscribes user device to browser Push Notifications via server VAPID key
+ */
+async function subscribeDeviceToPushNotifications(registration) {
+  const swReg = registration || state.pushNotification.swRegistration;
+  if (!swReg || !('pushManager' in swReg)) {
+    return null;
+  }
+
+  try {
+    // 1. Fetch server VAPID public key
+    const res = await fetch('/api/push/vapid-public-key');
+    if (!res.ok) throw new Error(`VAPID key fetch failed with HTTP ${res.status}`);
+    const keyData = await res.json();
+
+    if (!keyData.publicKey) {
+      console.warn('⚠️ [Push Notifications] Server does not have VAPID keys configured.');
+      return null;
+    }
+
+    // 2. Check existing subscription or create new
+    let subscription = await swReg.pushManager.getSubscription();
+
+    if (!subscription) {
+      const convertedKey = urlBase64ToUint8Array(keyData.publicKey);
+      subscription = await swReg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: convertedKey
+      });
+      console.log('📱 [Push Notifications] Created new push subscription.');
+    }
+
+    state.pushNotification.subscription = subscription;
+
+    // 3. Register subscription on the server with user's ID
+    if (subscription && state.currentUser) {
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${state.authToken || ''}`
+        },
+        body: JSON.stringify({
+          subscription,
+          uid: state.currentUser.uid
+        })
+      });
+      console.log('✅ [Push Notifications] Registered device with CampusConnect server.');
+    }
+
+    return subscription;
+  } catch (err) {
+    console.warn('⚠️ [Push Notifications] Subscription failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Updates all notification indicators, badges, and banners across the UI
+ */
+function updatePushNotificationUI() {
+  const supported = 'Notification' in window;
+  const permission = supported ? Notification.permission : 'unsupported';
+  state.pushNotification.permission = permission;
+
+  // 1. Update Header Button (#btn-toggle-notifications)
+  if (dom.btnToggleNotifications) {
+    if (dom.notifIndicatorDot) {
+      dom.notifIndicatorDot.classList.remove('bg-emerald-400', 'bg-amber-400', 'bg-rose-500', 'animate-pulse');
+      if (permission === 'granted') {
+        dom.notifIndicatorDot.classList.add('bg-emerald-400');
+        dom.btnToggleNotifications.title = 'Push Notifications: Active (Click for Settings)';
+        if (dom.notifStatusText) dom.notifStatusText.textContent = 'Alerts On';
+      } else if (permission === 'denied') {
+        dom.notifIndicatorDot.classList.add('bg-rose-500');
+        dom.btnToggleNotifications.title = 'Push Notifications: Blocked in browser settings';
+        if (dom.notifStatusText) dom.notifStatusText.textContent = 'Alerts Blocked';
+      } else {
+        dom.notifIndicatorDot.classList.add('bg-amber-400', 'animate-pulse');
+        dom.btnToggleNotifications.title = 'Push Notifications: Click to enable';
+        if (dom.notifStatusText) dom.notifStatusText.textContent = 'Enable Alerts';
+      }
+    }
+  }
+
+  // 2. Update Settings Modal Badge & Buttons
+  if (dom.settingsNotifStatusBadge) {
+    dom.settingsNotifStatusBadge.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold font-mono border';
+    if (permission === 'granted') {
+      dom.settingsNotifStatusBadge.classList.add('bg-emerald-500/10', 'text-emerald-300', 'border-emerald-500/30');
+      dom.settingsNotifStatusBadge.textContent = '🟢 Active & Granted';
+      if (dom.btnSettingsRequestNotifs) {
+        dom.btnSettingsRequestNotifs.innerHTML = `
+          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          </svg>
+          <span>Permissions Active</span>
+        `;
+        dom.btnSettingsRequestNotifs.classList.remove('bg-indigo-600', 'hover:bg-indigo-500');
+        dom.btnSettingsRequestNotifs.classList.add('bg-emerald-700/60', 'hover:bg-emerald-600/60');
+      }
+    } else if (permission === 'denied') {
+      dom.settingsNotifStatusBadge.classList.add('bg-rose-500/10', 'text-rose-300', 'border-rose-500/30');
+      dom.settingsNotifStatusBadge.textContent = '🔴 Blocked in Browser';
+      if (dom.btnSettingsRequestNotifs) {
+        dom.btnSettingsRequestNotifs.innerHTML = `
+          <span>⚠️ Permissions Blocked</span>
+        `;
+        dom.btnSettingsRequestNotifs.classList.remove('bg-indigo-600', 'hover:bg-indigo-500');
+        dom.btnSettingsRequestNotifs.classList.add('bg-slate-800', 'text-slate-400');
+      }
+    } else {
+      dom.settingsNotifStatusBadge.classList.add('bg-amber-500/10', 'text-amber-300', 'border-amber-500/30');
+      dom.settingsNotifStatusBadge.textContent = '🟡 Not Enabled';
+      if (dom.btnSettingsRequestNotifs) {
+        dom.btnSettingsRequestNotifs.innerHTML = `
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+          <span>Enable Browser Permissions</span>
+        `;
+        dom.btnSettingsRequestNotifs.classList.remove('bg-emerald-700/60', 'hover:bg-emerald-600/60', 'bg-slate-800', 'text-slate-400');
+        dom.btnSettingsRequestNotifs.classList.add('bg-indigo-600', 'hover:bg-indigo-500', 'text-white');
+      }
+    }
+  }
+
+  // 3. Update First-time Banner
+  if (dom.notificationPermissionBanner) {
+    const shouldShowBanner = state.currentUser && 
+      permission === 'default' && 
+      !state.pushNotification.bannerDismissed;
+
+    if (shouldShowBanner) {
+      dom.notificationPermissionBanner.classList.remove('hidden');
+      dom.notificationPermissionBanner.classList.add('flex');
+    } else {
+      dom.notificationPermissionBanner.classList.add('hidden');
+      dom.notificationPermissionBanner.classList.remove('flex');
+    }
+  }
+}
+
+/**
+ * Requests browser notification permission and configures the service worker
+ */
+async function requestBrowserNotificationPermission() {
+  if (!('Notification' in window)) {
+    appendSystemNotice('⚠️ Browser notifications are not supported in this browser.');
+    return false;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+    updatePushNotificationUI();
+
+    if (permission === 'granted') {
+      appendSystemNotice('🔔 <strong>Push notifications enabled!</strong> You will now receive alerts for new messages when in other channels or in the background.');
+      
+      const reg = await registerPushServiceWorker();
+      if (reg) {
+        await subscribeDeviceToPushNotifications(reg);
+      }
+
+      // Show welcome notification
+      displayBrowserPushNotification({
+        sender: { name: 'CampusConnect' },
+        content: '🎉 Notifications are now active! You will be alerted for messages in other channels or when in the background.',
+        roomId: state.currentRoom || 'general'
+      }, false);
+
+      return true;
+    } else if (permission === 'denied') {
+      appendSystemNotice('⚠️ Notification permissions were blocked. To enable them, click the padlock or site settings icon in your browser address bar.');
+      return false;
+    }
+    return false;
+  } catch (error) {
+    console.warn('Error requesting notification permission:', error);
+    return false;
+  }
+}
+
+/**
+ * Plays a pleasant web audio chime if sound is enabled in preferences
+ */
+function playNotificationChime() {
+  if (!state.pushNotification.prefSound) return;
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.08); // A5
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.36);
+  } catch (e) {
+    // Web Audio may be restricted before user gesture
+  }
+}
+
+/**
+ * Displays a browser push notification with proper fallback and click handling
+ */
+function displayBrowserPushNotification(message, isDM = false) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+
+  const senderName = message.sender?.name || 'Classmate';
+  const channelObj = state.channels.find(c => c.id === message.roomId);
+  const channelLabel = isDM ? 'Direct Message' : (channelObj?.name || `#${message.roomId}`);
+
+  const notifTitle = isDM ? `💬 ${senderName}` : `${senderName} (${channelLabel})`;
+  let notifBody = message.content || (message.image ? '📷 Sent a photo' : 'Sent a message');
+  if (notifBody.length > 120) {
+    notifBody = notifBody.substring(0, 117) + '...';
+  }
+
+  const iconUrl = message.sender?.avatar || message.sender?.picture || 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff';
+  const notifOptions = {
+    body: notifBody,
+    icon: iconUrl,
+    badge: 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff',
+    tag: `campus-msg-${message.roomId}`,
+    renotify: true,
+    data: {
+      roomId: message.roomId,
+      isDM: Boolean(isDM),
+      targetUid: message.sender?.uid || null
+    }
+  };
+
+  playNotificationChime();
+
+  // Try service worker showNotification first (standard background-capable PWA API)
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready.then(reg => {
+      reg.showNotification(notifTitle, notifOptions);
+    }).catch(() => {
+      fallbackDesktopNotification(notifTitle, notifOptions);
+    });
+  } else {
+    fallbackDesktopNotification(notifTitle, notifOptions);
+  }
+}
+
+/**
+ * Fallback browser Notification constructor when service worker is not yet active
+ */
+function fallbackDesktopNotification(title, options) {
+  try {
+    const notif = new Notification(title, options);
+    notif.onclick = function() {
+      window.focus();
+      const data = options.data || {};
+      if (data.isDM && data.targetUid) {
+        openDirectMessage(data.targetUid);
+      } else if (data.roomId) {
+        switchChannel(data.roomId);
+      }
+      notif.close();
+    };
+  } catch (err) {
+    console.warn('Fallback Notification constructor error:', err);
+  }
+}
+
+/**
+ * Checks whether user should be alerted for this message
+ * (Conditions: inactive channel OR app running in background/minimized)
+ */
+function triggerBrowserNotificationIfEligible(message, isDM = false) {
+  if (!message || !state.currentUser) return;
+  const isFromMe = message.sender && message.sender.uid === state.currentUser.uid;
+  if (isFromMe) return;
+
+  const isBackground = document.hidden || document.visibilityState === 'hidden' || !document.hasFocus();
+  const isInactiveChannel = message.roomId !== state.currentRoom;
+
+  const allowInactive = state.pushNotification.prefInactiveChannels;
+  const allowBackground = state.pushNotification.prefBackground;
+
+  let shouldNotify = false;
+  if (isInactiveChannel && allowInactive) {
+    shouldNotify = true;
+  }
+  if (isBackground && allowBackground) {
+    shouldNotify = true;
+  }
+
+  if (shouldNotify) {
+    displayBrowserPushNotification(message, isDM);
+  }
+}
+
+/**
+ * Dispatches a test push notification to verify service worker and notification permissions
+ */
+async function sendTestPushNotification() {
+  if (typeof Notification === 'undefined') {
+    appendSystemNotice('⚠️ Browser notifications are not supported in this browser.');
+    return;
+  }
+
+  if (Notification.permission !== 'granted') {
+    const granted = await requestBrowserNotificationPermission();
+    if (!granted) return;
+  }
+
+  // 1. Display local test notification
+  displayBrowserPushNotification({
+    sender: { name: 'CampusConnect Bot', avatar: 'https://ui-avatars.com/api/?name=CC&background=6366f1&color=fff' },
+    content: '🚀 Test push notification successful! Your service worker is ready to alert you of classmate messages.',
+    roomId: state.currentRoom || 'general'
+  }, false);
+
+  // 2. Trigger server test endpoint as well
+  try {
+    if (state.currentUser) {
+      await fetch('/api/push/test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${state.authToken || ''}`
+        },
+        body: JSON.stringify({
+          uid: state.currentUser.uid,
+          subscription: state.pushNotification.subscription
+        })
+      });
+    }
+  } catch (e) {
+    // Non-blocking
+  }
+}
+
+/**
+ * Initializes Push Notifications event listeners, preferences, and service worker
+ */
+function initPushNotifications() {
+  // 1. Register Service Worker
+  registerPushServiceWorker();
+
+  // 2. Listen for messages posted from Service Worker (e.g. notification click navigation)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'NAVIGATE_TO_ROOM') {
+        const { roomId, isDM, targetUid } = event.data;
+        if (isDM && targetUid) {
+          openDirectMessage(targetUid);
+        } else if (roomId) {
+          switchChannel(roomId);
+        }
+      }
+    });
+  }
+
+  // 3. Sync background/foreground visibility states with server
+  const handleVisibilityChange = () => {
+    const isBackground = document.hidden || document.visibilityState === 'hidden' || !document.hasFocus();
+    if (state.socket && state.socket.connected) {
+      state.socket.emit('user:visibility_state', { isBackground });
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('blur', () => {
+    if (state.socket && state.socket.connected) {
+      state.socket.emit('user:visibility_state', { isBackground: true });
+    }
+  });
+  window.addEventListener('focus', () => {
+    if (state.socket && state.socket.connected) {
+      state.socket.emit('user:visibility_state', { isBackground: false });
+    }
+    // Clear unreads for active room if returning
+    if (!state.isDirectMessage && state.currentRoom) {
+      state.unreadCounts[state.currentRoom] = 0;
+      renderChannelsList();
+      updateDocumentTitleWithUnreads();
+      checkAndMarkMessagesRead();
+    }
+  });
+
+  // 4. Header Notification Button click
+  if (dom.btnToggleNotifications) {
+    dom.btnToggleNotifications.addEventListener('click', () => {
+      if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+        requestBrowserNotificationPermission();
+      } else {
+        // If already granted, open settings modal so user can configure options
+        openConfigGuide();
+      }
+    });
+  }
+
+  // 5. First-time Banner buttons
+  if (dom.btnBannerEnableNotifs) {
+    dom.btnBannerEnableNotifs.addEventListener('click', async () => {
+      await requestBrowserNotificationPermission();
+    });
+  }
+  if (dom.btnBannerDismissNotifs) {
+    dom.btnBannerDismissNotifs.addEventListener('click', () => {
+      state.pushNotification.bannerDismissed = true;
+      localStorage.setItem('campusconnect_notif_banner_dismissed', 'true');
+      updatePushNotificationUI();
+    });
+  }
+
+  // 6. Settings Modal Notification controls
+  if (dom.btnSettingsRequestNotifs) {
+    dom.btnSettingsRequestNotifs.addEventListener('click', () => {
+      requestBrowserNotificationPermission();
+    });
+  }
+  if (dom.btnSettingsTestNotif) {
+    dom.btnSettingsTestNotif.addEventListener('click', () => {
+      sendTestPushNotification();
+    });
+  }
+
+  // 7. Settings Notification Preference Toggles
+  if (dom.prefNotifInactiveChannels) {
+    dom.prefNotifInactiveChannels.checked = state.pushNotification.prefInactiveChannels;
+    dom.prefNotifInactiveChannels.addEventListener('change', (e) => {
+      state.pushNotification.prefInactiveChannels = e.target.checked;
+      localStorage.setItem('campusconnect_notif_inactive', e.target.checked);
+    });
+  }
+  if (dom.prefNotifBackground) {
+    dom.prefNotifBackground.checked = state.pushNotification.prefBackground;
+    dom.prefNotifBackground.addEventListener('change', (e) => {
+      state.pushNotification.prefBackground = e.target.checked;
+      localStorage.setItem('campusconnect_notif_bg', e.target.checked);
+    });
+  }
+  if (dom.prefNotifSound) {
+    dom.prefNotifSound.checked = state.pushNotification.prefSound;
+    dom.prefNotifSound.addEventListener('change', (e) => {
+      state.pushNotification.prefSound = e.target.checked;
+      localStorage.setItem('campusconnect_notif_sound', e.target.checked);
+    });
+  }
+
+  // 8. Initial UI sync
+  updatePushNotificationUI();
+}
+
 // ==========================================
 // CAMPUS ARCADE: SNAKE MINIGAME
 // ==========================================
@@ -4691,6 +5241,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initTheme();
   setupEventListeners();
+  initPushNotifications();
   setupSlashCommands();
   setupSnakeControls();
   initializeFirebase();
