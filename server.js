@@ -14,7 +14,17 @@ import dotenv from 'dotenv';
 import webpush from 'web-push';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+
+// Resilient import for Firestore to prevent container crash if @google-cloud/firestore is absent
+let getFirestore = null;
+let FieldValue = null;
+try {
+  const firestoreModule = await import('firebase-admin/firestore');
+  getFirestore = firestoreModule.getFirestore;
+  FieldValue = firestoreModule.FieldValue;
+} catch (fsImportErr) {
+  console.warn('⚠️ [Firebase Admin] Could not load firebase-admin/firestore module:', fsImportErr.message);
+}
 
 dotenv.config();
 
@@ -91,9 +101,11 @@ try {
       adminAuth = getAuth(adminApp);
       isFirebaseAdminReady = true;
       try {
-        const dbId = firebaseAppletConfig?.firestoreDatabaseId;
-        firestoreDb = dbId ? getFirestore(adminApp, dbId) : getFirestore(adminApp);
-        console.log(`✅ [Firebase Admin] Initialized with serviceAccountKey.json credentials and Firestore ready (dbId: ${dbId || 'default'}).`);
+        if (getFirestore) {
+          const dbId = firebaseAppletConfig?.firestoreDatabaseId;
+          firestoreDb = dbId ? getFirestore(adminApp, dbId) : getFirestore(adminApp);
+          console.log(`✅ [Firebase Admin] Initialized with serviceAccountKey.json credentials and Firestore ready (dbId: ${dbId || 'default'}).`);
+        }
       } catch (fsErr) {
         console.warn('⚠️ [Firebase Admin] Could not initialize Firestore:', fsErr.message);
       }
@@ -112,8 +124,10 @@ try {
     adminAuth = getAuth(adminApp);
     isFirebaseAdminReady = true;
     try {
-      firestoreDb = getFirestore(adminApp);
-      console.log('✅ [Firebase Admin] Initialized with environment credentials and Firestore ready.');
+      if (getFirestore) {
+        firestoreDb = getFirestore(adminApp);
+        console.log('✅ [Firebase Admin] Initialized with environment credentials and Firestore ready.');
+      }
     } catch (fsErr) {
       console.warn('⚠️ [Firebase Admin] Could not initialize Firestore:', fsErr.message);
     }
@@ -281,7 +295,7 @@ async function saveMessageToFirestore(messageObj) {
       formattedTime: messageObj.formattedTime,
       reactions: messageObj.reactions || {},
       seenBy: messageObj.seenBy || [],
-      createdAt: FieldValue.serverTimestamp()
+      createdAt: FieldValue?.serverTimestamp ? FieldValue.serverTimestamp() : new Date().toISOString()
     });
   } catch (fsErr) {
     handleFirestoreError(fsErr, `Failed to persist message ${messageObj.id}`);
@@ -569,7 +583,7 @@ async function saveUserProfile(uid, profileData) {
         isMuted: updated.isMuted,
         isBanned: updated.isBanned,
         status: activeUser?.status || 'online',
-        updatedAt: FieldValue.serverTimestamp()
+        updatedAt: FieldValue?.serverTimestamp ? FieldValue.serverTimestamp() : new Date().toISOString()
       }, { merge: true });
       console.log(`💾 [Firestore] Saved user profile for ${uid} (${updated.name}) [${role}]`);
     } catch (fsErr) {
