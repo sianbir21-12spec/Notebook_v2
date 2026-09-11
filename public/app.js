@@ -245,10 +245,48 @@ const dom = {
   channelLockedBadge: document.getElementById('channel-locked-badge'),
   systemBroadcastBanner: document.getElementById('system-broadcast-banner'),
   
-  // Arcade Minigames
+  // Arcade Minigames & Web Arenas Hub
   btnOpenArcade: document.getElementById('btn-open-arcade'),
   btnCloseArcade: document.getElementById('btn-close-arcade'),
   modalArcade: document.getElementById('modal-arcade'),
+  arcadeSearchInput: document.getElementById('arcade-search-input'),
+  arcadeGamesList: document.getElementById('arcade-games-list'),
+  arcadeFilterBtns: document.querySelectorAll('.arcade-filter-btn'),
+  arcadeStageIcon: document.getElementById('arcade-stage-icon'),
+  arcadeStageTitle: document.getElementById('arcade-stage-title'),
+  arcadeStageBadge: document.getElementById('arcade-stage-badge'),
+  arcadeStageDesc: document.getElementById('arcade-stage-desc'),
+  arcadeStageUrlLink: document.getElementById('arcade-stage-url-link'),
+  arcadeStageUrlText: document.getElementById('arcade-stage-url-text'),
+  btnArcadeLaunchNewtab: document.getElementById('btn-arcade-launch-newtab'),
+  btnArcadeShareChat: document.getElementById('btn-arcade-share-chat'),
+  btnArcadeReload: document.getElementById('btn-arcade-reload'),
+  btnArcadeFullscreen: document.getElementById('btn-arcade-fullscreen'),
+  arcadeStageViewport: document.getElementById('arcade-stage-viewport'),
+  arcadeWebContainer: document.getElementById('arcade-web-container'),
+  arcadeWebIframe: document.getElementById('arcade-web-iframe'),
+  arcadeBannerNewtabLink: document.getElementById('arcade-banner-newtab-link'),
+  arcadeCanvasContainer: document.getElementById('arcade-canvas-container'),
+  arcadeScoreLabel: document.getElementById('arcade-score-label'),
+  arcadeScoreVal: document.getElementById('arcade-score-val'),
+  arcadeHighscoreVal: document.getElementById('arcade-highscore-val'),
+  arcadeExtraStatBox: document.getElementById('arcade-extra-stat-box'),
+  arcadeExtraStatLabel: document.getElementById('arcade-extra-stat-label'),
+  arcadeExtraStatVal: document.getElementById('arcade-extra-stat-val'),
+  arcadeGameCanvas: document.getElementById('arcade-game-canvas'),
+  arcadeGameOverlay: document.getElementById('arcade-game-overlay'),
+  arcadeOverlayIcon: document.getElementById('arcade-overlay-icon'),
+  arcadeOverlayTitle: document.getElementById('arcade-overlay-title'),
+  arcadeOverlayMsg: document.getElementById('arcade-overlay-msg'),
+  btnArcadeStartGame: document.getElementById('btn-arcade-start-game'),
+  arcadeTouchPad: document.getElementById('arcade-touch-pad'),
+  btnTouchUp: document.getElementById('btn-touch-up'),
+  btnTouchDown: document.getElementById('btn-touch-down'),
+  btnTouchLeft: document.getElementById('btn-touch-left'),
+  btnTouchRight: document.getElementById('btn-touch-right'),
+  btnTouchAction: document.getElementById('btn-touch-action'),
+  arcadeControlsHint: document.getElementById('arcade-controls-hint'),
+  // Backward compatibility
   btnStartSnake: document.getElementById('btn-start-snake'),
   snakeCanvas: document.getElementById('snake-canvas'),
   snakeScore: document.getElementById('snake-score'),
@@ -2497,7 +2535,12 @@ function sendMessage() {
   }
   if (content === '/help') {
     dom.messageInput.value = '';
-    appendSystemNotice('🤖 **Available Commands:**\n`/help` - Show this message\n`/clear` - Clear local history\n`/roll` - Roll a random number (1-100)\n`/flip` - Flip a coin\n`/gif [query]` - Send a GIF placeholder');
+    appendSystemNotice('🤖 **Available Commands:**\n`/help` - Show this message\n`/arcade` or `/games` - Open Campus Arcade & game hub\n`/clear` - Clear local history\n`/roll` - Roll a random number (1-100)\n`/flip` - Flip a coin\n`/gif [query]` - Send a GIF placeholder');
+    return;
+  }
+  if (content === '/arcade' || content === '/games') {
+    dom.messageInput.value = '';
+    openArcadeModal();
     return;
   }
 
@@ -4959,169 +5002,1345 @@ function initPushNotifications() {
 }
 
 // ==========================================
-// CAMPUS ARCADE: SNAKE MINIGAME
+// CAMPUS ARCADE & GAME ZONE: 7 GAMES (WEB & RETRO)
 // ==========================================
-let snakeGameInterval = null;
+const ARCADE_GAMES = [
+  {
+    id: 'fps2',
+    type: 'web',
+    title: 'FPS 2: Instagib Arena',
+    url: 'https://fps2.zeabur.app',
+    host: 'fps2.zeabur.app',
+    icon: '🎯',
+    category: 'web',
+    badge: '3D Multiplayer FPS',
+    badgeColor: 'bg-indigo-600/20 text-indigo-300 border-indigo-500/30',
+    desc: 'Quake-style 3D instagib railgun arena shooter. One railgun, one shot, one kill. Play FFA, TDM, and 1v1 duels with your classmates in the browser!',
+    controls: 'WASD to Move, Mouse to Aim & Fire, Space to Jump',
+    tags: ['FPS', '3D Arena', 'Multiplayer', 'Zeabur']
+  },
+  {
+    id: 'fp',
+    type: 'web',
+    title: 'FP Arena Shooter',
+    url: 'https://fp.zeabur.app',
+    host: 'fp.zeabur.app',
+    icon: '🔫',
+    category: 'web',
+    badge: 'First-Person Web Action',
+    badgeColor: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
+    desc: 'Fast-paced first-person combat and reflex challenge hosted on Zeabur. Put your aim and quick reflexes to the test.',
+    controls: 'WASD to Move, Mouse to Look & Shoot',
+    tags: ['FPS', 'Action', 'Shooter', 'Zeabur']
+  },
+  {
+    id: 'highfly',
+    type: 'web',
+    title: 'High Fly: Fable Flight',
+    url: 'https://highfly.zeabur.app',
+    host: 'highfly.zeabur.app',
+    icon: '✈️',
+    category: 'web',
+    badge: 'Flight Simulator',
+    badgeColor: 'bg-sky-600/20 text-sky-300 border-sky-500/30',
+    desc: 'Fable Flight aerobatic flight simulator. Navigate changing weather, aerial acrobatics, and high-altitude flight challenges high above the clouds.',
+    controls: 'Mouse / Arrow Keys to Steer, Throttle Controls',
+    tags: ['Flight Sim', 'Acrobatics', 'Aviation', 'Zeabur']
+  },
+  {
+    id: 'snake',
+    type: 'canvas',
+    title: 'Classic Snake',
+    icon: '🐍',
+    category: 'retro',
+    badge: 'Retro Minigame',
+    badgeColor: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
+    desc: 'The legendary retro classic! Steer the green snake, eat apples to grow longer, and avoid running into the walls or your own tail.',
+    controls: 'Arrow Keys or WASD to change direction',
+    tags: ['Retro', 'Snake', 'Casual', 'Highscore']
+  },
+  {
+    id: 'space',
+    type: 'canvas',
+    title: 'Space Defender',
+    icon: '🚀',
+    category: 'retro',
+    badge: 'Galaxy Arcade Shooter',
+    badgeColor: 'bg-violet-600/20 text-violet-300 border-violet-500/30',
+    desc: 'Defend the campus quadrant! Pilot your starfighter, blast cascading asteroid showers and alien scout drones with rapid laser cannons.',
+    controls: 'Left/Right Arrows or A/D to steer, Spacebar to fire lasers',
+    tags: ['Shooter', 'Asteroids', 'Action', 'Arcade']
+  },
+  {
+    id: 'flappy',
+    type: 'canvas',
+    title: 'Flappy Campus',
+    icon: '🐤',
+    category: 'retro',
+    badge: 'Tap Timing Minigame',
+    badgeColor: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
+    desc: 'Flap through tricky stacks of campus textbooks, exam papers, and library pillars. How high of a score can you get before crashing?',
+    controls: 'Spacebar, Click, or Tap to flap wings',
+    tags: ['Flappy', 'Timing', 'Addictive', 'Arcade']
+  },
+  {
+    id: 'brick',
+    type: 'canvas',
+    title: 'Brick Breaker',
+    icon: '🧱',
+    category: 'retro',
+    badge: 'Retro Arkanoid',
+    badgeColor: 'bg-rose-600/20 text-rose-300 border-rose-500/30',
+    desc: 'Smash through campus brick walls with precision paddle deflections and angular bounce physics! Clear the board to set the top score.',
+    controls: 'Mouse or Left/Right Arrow Keys to move paddle',
+    tags: ['Breakout', 'Arkanoid', 'Arcade', 'Retro']
+  }
+];
+
+// Arcade Runtime State
+let arcadeState = {
+  activeGameId: 'fps2',
+  activeFilter: 'all',
+  searchQuery: '',
+  canvasAnimId: null,
+  canvasLoopInterval: null,
+  gameRunning: false,
+  currentGameScore: 0,
+  currentGameLives: 3,
+  // High scores dictionary
+  highScores: {
+    snake: parseInt(localStorage.getItem('campus_snake_highscore')) || 0,
+    space: parseInt(localStorage.getItem('campus_space_highscore')) || 0,
+    flappy: parseInt(localStorage.getItem('campus_flappy_highscore')) || 0,
+    brick: parseInt(localStorage.getItem('campus_brick_highscore')) || 0
+  }
+};
+
+// Canvas Game Engines
 let snakeGameState = {
   snake: [{ x: 10, y: 10 }],
   food: { x: 5, y: 5 },
   dx: 1,
   dy: 0,
   score: 0,
-  highScore: parseInt(localStorage.getItem('campus_snake_highscore')) || 0,
   isGameOver: false,
-  gridSize: 15,
-  tileCount: 20
+  gridSize: 18,
+  tileCountX: 24,
+  tileCountY: 18
 };
 
-function drawSnakeGame() {
-  if (!dom.snakeCanvas) return;
-  const ctx = dom.snakeCanvas.getContext('2d');
-  
-  // Clear canvas
-  ctx.fillStyle = '#020617'; // slate-950
-  ctx.fillRect(0, 0, dom.snakeCanvas.width, dom.snakeCanvas.height);
-  
-  // Move snake
-  const head = { x: snakeGameState.snake[0].x + snakeGameState.dx, y: snakeGameState.snake[0].y + snakeGameState.dy };
-  
-  // Check wall collision
-  if (head.x < 0 || head.x >= snakeGameState.tileCount || head.y < 0 || head.y >= snakeGameState.tileCount) {
-    handleSnakeGameOver();
-    return;
-  }
-  
-  // Check self collision
-  for (let i = 0; i < snakeGameState.snake.length; i++) {
-    if (head.x === snakeGameState.snake[i].x && head.y === snakeGameState.snake[i].y) {
-      handleSnakeGameOver();
-      return;
-    }
-  }
-  
-  snakeGameState.snake.unshift(head);
-  
-  // Check food collision
-  if (head.x === snakeGameState.food.x && head.y === snakeGameState.food.y) {
-    snakeGameState.score += 10;
-    if (dom.snakeScore) dom.snakeScore.textContent = snakeGameState.score;
-    if (snakeGameState.score > snakeGameState.highScore) {
-      snakeGameState.highScore = snakeGameState.score;
-      localStorage.setItem('campus_snake_highscore', snakeGameState.highScore);
-      if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
-    }
-    // Spawn new food
-    snakeGameState.food = {
-      x: Math.floor(Math.random() * snakeGameState.tileCount),
-      y: Math.floor(Math.random() * snakeGameState.tileCount)
-    };
+let spaceGameState = {
+  ship: { x: 200, y: 290, w: 32, h: 28, speed: 6 },
+  lasers: [],
+  enemies: [],
+  particles: [],
+  stars: [],
+  score: 0,
+  lives: 3,
+  keys: { left: false, right: false, fire: false },
+  lastFireTime: 0
+};
+
+let flappyGameState = {
+  bird: { x: 80, y: 150, vy: 0, gravity: 0.38, jump: -6.5, radius: 12 },
+  pipes: [],
+  score: 0,
+  frameCount: 0
+};
+
+let brickGameState = {
+  paddle: { x: 180, y: 315, w: 80, h: 12, speed: 7 },
+  ball: { x: 220, y: 300, vx: 3.5, vy: -3.5, radius: 6 },
+  bricks: [],
+  score: 0,
+  lives: 3,
+  keys: { left: false, right: false }
+};
+
+/**
+ * Open the Campus Arcade modal
+ */
+function openArcadeModal(preferredGameId = null) {
+  if (!dom.modalArcade) return;
+  dom.modalArcade.classList.remove('hidden');
+  renderArcadeGamesList();
+  if (preferredGameId) {
+    selectArcadeGame(preferredGameId);
   } else {
-    snakeGameState.snake.pop(); // Remove tail if no food eaten
+    selectArcadeGame(arcadeState.activeGameId || 'fps2');
   }
-  
-  // Draw Food
-  ctx.fillStyle = '#f43f5e'; // rose-500
-  ctx.fillRect(snakeGameState.food.x * snakeGameState.gridSize, snakeGameState.food.y * snakeGameState.gridSize, snakeGameState.gridSize - 1, snakeGameState.gridSize - 1);
-  
-  // Draw Snake
-  ctx.fillStyle = '#4ade80'; // emerald-400
-  snakeGameState.snake.forEach((part, index) => {
-    ctx.fillStyle = index === 0 ? '#34d399' : '#10b981'; // Lighter head
-    ctx.fillRect(part.x * snakeGameState.gridSize, part.y * snakeGameState.gridSize, snakeGameState.gridSize - 1, snakeGameState.gridSize - 1);
+}
+
+/**
+ * Close the Campus Arcade modal
+ */
+function closeArcadeModal() {
+  if (!dom.modalArcade) return;
+  dom.modalArcade.classList.add('hidden');
+  stopActiveCanvasGame();
+}
+
+/**
+ * Filter games list based on tab and search
+ */
+function getFilteredArcadeGames() {
+  return ARCADE_GAMES.filter(g => {
+    const matchesFilter = (arcadeState.activeFilter === 'all') || (g.category === arcadeState.activeFilter);
+    if (!matchesFilter) return false;
+    if (!arcadeState.searchQuery) return true;
+    const q = arcadeState.searchQuery.toLowerCase();
+    return g.title.toLowerCase().includes(q) ||
+           g.desc.toLowerCase().includes(q) ||
+           (g.url && g.url.toLowerCase().includes(q)) ||
+           (g.host && g.host.toLowerCase().includes(q)) ||
+           g.tags.some(t => t.toLowerCase().includes(q));
   });
 }
 
-function handleSnakeGameOver() {
-  clearInterval(snakeGameInterval);
-  snakeGameInterval = null;
-  snakeGameState.isGameOver = true;
-  
-  if (dom.snakeOverlay) {
-    dom.snakeOverlay.classList.remove('hidden');
-    if (dom.snakeOverlayTitle) dom.snakeOverlayTitle.textContent = 'GAME OVER';
-    if (dom.snakeOverlayMsg) dom.snakeOverlayMsg.textContent = `Final Score: ${snakeGameState.score}`;
-    if (dom.btnStartSnake) dom.btnStartSnake.textContent = 'Play Again';
+/**
+ * Render the games list cards in the sidebar
+ */
+function renderArcadeGamesList() {
+  if (!dom.arcadeGamesList) return;
+  const filtered = getFilteredArcadeGames();
+  dom.arcadeGamesList.innerHTML = '';
+
+  if (filtered.length === 0) {
+    dom.arcadeGamesList.innerHTML = `
+      <div class="text-center py-8 text-xs text-slate-500">
+        No games found matching "${escapeHtml(arcadeState.searchQuery)}".
+      </div>
+    `;
+    return;
+  }
+
+  filtered.forEach(game => {
+    const isActive = game.id === arcadeState.activeGameId;
+    const item = document.createElement('div');
+    item.className = `p-2.5 rounded-xl border transition cursor-pointer flex items-center justify-between gap-2.5 ${
+      isActive
+        ? 'bg-indigo-600/20 border-indigo-500/50 shadow-sm'
+        : 'bg-slate-900/60 border-slate-800/80 hover:bg-slate-800/60 hover:border-slate-700'
+    }`;
+    item.dataset.gameId = game.id;
+
+    let subtext = '';
+    if (game.type === 'web') {
+      subtext = `<span class="text-indigo-400 font-mono text-[11px]">${game.host}</span>`;
+    } else {
+      const hs = arcadeState.highScores[game.id] || 0;
+      subtext = `<span class="text-emerald-400 font-mono text-[11px]">Best: ${hs}</span>`;
+    }
+
+    item.innerHTML = `
+      <div class="flex items-center gap-2.5 min-w-0 flex-1">
+        <div class="w-9 h-9 rounded-lg bg-slate-800 flex items-center justify-center text-lg shrink-0 border border-slate-700/60">
+          ${game.icon}
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-bold text-white truncate ${isActive ? 'text-indigo-300' : ''}">${escapeHtml(game.title)}</span>
+          </div>
+          <div class="flex items-center gap-2 mt-0.5">
+            ${subtext}
+            <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono">${game.category === 'web' ? 'Web 3D' : 'Retro'}</span>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        ${game.type === 'web' ? `
+          <a href="${game.url}" target="_blank" rel="noopener noreferrer" title="Launch in new tab" onclick="event.stopPropagation()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/80 transition">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+        ` : ''}
+        <button type="button" class="px-2 py-1 rounded-lg text-[11px] font-bold ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:text-white'} transition">
+          Play
+        </button>
+      </div>
+    `;
+
+    item.addEventListener('click', () => {
+      selectArcadeGame(game.id);
+    });
+
+    dom.arcadeGamesList.appendChild(item);
+  });
+}
+
+/**
+ * Select and load a game into the main stage
+ */
+function selectArcadeGame(gameId) {
+  const game = ARCADE_GAMES.find(g => g.id === gameId);
+  if (!game) return;
+
+  stopActiveCanvasGame();
+  arcadeState.activeGameId = game.id;
+
+  // Refresh sidebar selection highlights
+  renderArcadeGamesList();
+
+  // Update stage header
+  if (dom.arcadeStageIcon) dom.arcadeStageIcon.textContent = game.icon;
+  if (dom.arcadeStageTitle) dom.arcadeStageTitle.textContent = game.title;
+  if (dom.arcadeStageBadge) {
+    dom.arcadeStageBadge.textContent = game.badge;
+    dom.arcadeStageBadge.className = `px-2 py-0.5 rounded-full text-[10px] font-bold font-mono border ${game.badgeColor}`;
+  }
+  if (dom.arcadeStageDesc) dom.arcadeStageDesc.textContent = game.desc;
+
+  if (game.type === 'web') {
+    // Web game configuration
+    if (dom.arcadeStageUrlLink) {
+      dom.arcadeStageUrlLink.classList.remove('hidden');
+      dom.arcadeStageUrlLink.href = game.url;
+    }
+    if (dom.arcadeStageUrlText) dom.arcadeStageUrlText.textContent = game.host;
+    if (dom.btnArcadeLaunchNewtab) {
+      dom.btnArcadeLaunchNewtab.classList.remove('hidden');
+      dom.btnArcadeLaunchNewtab.href = game.url;
+    }
+    if (dom.arcadeBannerNewtabLink) dom.arcadeBannerNewtabLink.href = game.url;
+
+    // View toggling
+    if (dom.arcadeWebContainer) dom.arcadeWebContainer.classList.remove('hidden');
+    if (dom.arcadeCanvasContainer) dom.arcadeCanvasContainer.classList.add('hidden');
+
+    // Load iframe if different
+    if (dom.arcadeWebIframe) {
+      if (dom.arcadeWebIframe.src !== game.url) {
+        dom.arcadeWebIframe.src = game.url;
+      }
+    }
+  } else {
+    // Canvas retro game configuration
+    if (dom.arcadeStageUrlLink) dom.arcadeStageUrlLink.classList.add('hidden');
+    if (dom.btnArcadeLaunchNewtab) dom.btnArcadeLaunchNewtab.classList.add('hidden');
+
+    // View toggling
+    if (dom.arcadeWebContainer) dom.arcadeWebContainer.classList.add('hidden');
+    if (dom.arcadeCanvasContainer) dom.arcadeCanvasContainer.classList.remove('hidden');
+
+    // Configure overlay
+    if (dom.arcadeOverlayIcon) dom.arcadeOverlayIcon.textContent = game.icon;
+    if (dom.arcadeOverlayTitle) dom.arcadeOverlayTitle.textContent = game.title.toUpperCase();
+    if (dom.arcadeOverlayMsg) dom.arcadeOverlayMsg.textContent = game.controls;
+    if (dom.btnArcadeStartGame) dom.btnArcadeStartGame.textContent = 'Play Game';
+    if (dom.arcadeGameOverlay) dom.arcadeGameOverlay.classList.remove('hidden');
+
+    // Configure score counters
+    const hs = arcadeState.highScores[game.id] || 0;
+    arcadeState.currentGameScore = 0;
+    if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = '0';
+    if (dom.arcadeHighscoreVal) dom.arcadeHighscoreVal.textContent = hs;
+    if (dom.snakeScore) dom.snakeScore.textContent = '0';
+    if (dom.snakeHighscore) dom.snakeHighscore.textContent = hs;
+
+    // Extra stat box (Lives for space/brick)
+    if (dom.arcadeExtraStatBox) {
+      if (game.id === 'space' || game.id === 'brick') {
+        dom.arcadeExtraStatBox.classList.remove('hidden');
+        if (dom.arcadeExtraStatLabel) dom.arcadeExtraStatLabel.textContent = 'LIVES:';
+        if (dom.arcadeExtraStatVal) dom.arcadeExtraStatVal.textContent = '❤️❤️❤️';
+      } else {
+        dom.arcadeExtraStatBox.classList.add('hidden');
+      }
+    }
+
+    if (dom.arcadeControlsHint) {
+      dom.arcadeControlsHint.innerHTML = `Controls: <span class="text-slate-300 font-mono">${game.controls}</span>`;
+    }
+
+    // Prepare initial canvas render preview
+    drawCanvasGameInitialFrame(game.id);
   }
 }
 
-function startSnakeGame() {
-  if (dom.snakeOverlay) dom.snakeOverlay.classList.add('hidden');
-  
+/**
+ * Stop any active canvas game intervals or animation frames
+ */
+function stopActiveCanvasGame() {
+  arcadeState.gameRunning = false;
+  if (arcadeState.canvasAnimId) {
+    cancelAnimationFrame(arcadeState.canvasAnimId);
+    arcadeState.canvasAnimId = null;
+  }
+  if (arcadeState.canvasLoopInterval) {
+    clearInterval(arcadeState.canvasLoopInterval);
+    arcadeState.canvasLoopInterval = null;
+  }
+  // Also clear legacy snake interval
+  if (typeof snakeGameInterval !== 'undefined' && snakeGameInterval) {
+    clearInterval(snakeGameInterval);
+    snakeGameInterval = null;
+  }
+}
+
+/**
+ * Start playing the currently selected canvas minigame
+ */
+function startActiveCanvasGame() {
+  stopActiveCanvasGame();
+  const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+  if (!game || game.type !== 'canvas') return;
+
+  if (dom.arcadeGameOverlay) dom.arcadeGameOverlay.classList.add('hidden');
+  arcadeState.gameRunning = true;
+  arcadeState.currentGameScore = 0;
+
+  if (game.id === 'snake') {
+    initSnakeGame();
+  } else if (game.id === 'space') {
+    initSpaceGame();
+  } else if (game.id === 'flappy') {
+    initFlappyGame();
+  } else if (game.id === 'brick') {
+    initBrickGame();
+  }
+}
+
+/**
+ * Handle game over for canvas games
+ */
+function handleCanvasGameOver(finalScore, gameName) {
+  stopActiveCanvasGame();
+  const gameId = arcadeState.activeGameId;
+  const currentBest = arcadeState.highScores[gameId] || 0;
+  let isNewBest = false;
+
+  if (finalScore > currentBest) {
+    arcadeState.highScores[gameId] = finalScore;
+    localStorage.setItem(`campus_${gameId}_highscore`, finalScore);
+    if (dom.arcadeHighscoreVal) dom.arcadeHighscoreVal.textContent = finalScore;
+    if (dom.snakeHighscore && gameId === 'snake') dom.snakeHighscore.textContent = finalScore;
+    isNewBest = true;
+    renderArcadeGamesList();
+  }
+
+  if (dom.arcadeGameOverlay) {
+    dom.arcadeGameOverlay.classList.remove('hidden');
+    if (dom.arcadeOverlayTitle) dom.arcadeOverlayTitle.textContent = isNewBest ? '🎉 NEW HIGH SCORE!' : 'GAME OVER';
+    if (dom.arcadeOverlayMsg) {
+      dom.arcadeOverlayMsg.textContent = isNewBest 
+        ? `Incredible! New high score: ${finalScore} points!` 
+        : `Score: ${finalScore} (High: ${arcadeState.highScores[gameId]})`;
+    }
+    if (dom.btnArcadeStartGame) dom.btnArcadeStartGame.textContent = 'Play Again';
+  }
+}
+
+// ----------------------------------------------------
+// CANVAS GAME 1: CLASSIC SNAKE
+// ----------------------------------------------------
+function initSnakeGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+
   snakeGameState = {
-    snake: [{ x: 10, y: 10 }],
-    food: {
-      x: Math.floor(Math.random() * 20),
-      y: Math.floor(Math.random() * 20)
-    },
+    snake: [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }],
+    food: { x: 16, y: 10 },
     dx: 1,
     dy: 0,
     score: 0,
-    highScore: parseInt(localStorage.getItem('campus_snake_highscore')) || 0,
     isGameOver: false,
-    gridSize: 15,
-    tileCount: 20
+    gridSize: 18,
+    tileCountX: Math.floor(canvas.width / 18),
+    tileCountY: Math.floor(canvas.height / 18)
   };
-  
+
+  if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = '0';
   if (dom.snakeScore) dom.snakeScore.textContent = '0';
-  if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
-  
-  if (snakeGameInterval) clearInterval(snakeGameInterval);
-  snakeGameInterval = setInterval(drawSnakeGame, 100); // 10 FPS
+
+  arcadeState.canvasLoopInterval = setInterval(updateSnakeGame, 100);
 }
 
-function setupSnakeControls() {
-  if (dom.btnOpenArcade) {
-    dom.btnOpenArcade.addEventListener('click', () => {
-      if (dom.modalArcade) dom.modalArcade.classList.remove('hidden');
-      if (dom.snakeHighscore) dom.snakeHighscore.textContent = snakeGameState.highScore;
-    });
+function updateSnakeGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas || !arcadeState.gameRunning) return;
+  const ctx = canvas.getContext('2d');
+
+  // Background
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines subtle pattern
+  ctx.strokeStyle = 'rgba(30, 41, 59, 0.4)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < canvas.width; x += snakeGameState.gridSize) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
   }
-  
-  if (dom.btnCloseArcade) {
-    dom.btnCloseArcade.addEventListener('click', () => {
-      if (dom.modalArcade) dom.modalArcade.classList.add('hidden');
-      if (snakeGameInterval) clearInterval(snakeGameInterval);
-      if (dom.snakeOverlay) dom.snakeOverlay.classList.remove('hidden');
-      if (dom.snakeOverlayTitle) dom.snakeOverlayTitle.textContent = 'SNAKE';
-      if (dom.snakeOverlayMsg) dom.snakeOverlayMsg.textContent = 'Use Arrow Keys to play';
-      if (dom.btnStartSnake) dom.btnStartSnake.textContent = 'Play Game';
-    });
+  for (let y = 0; y < canvas.height; y += snakeGameState.gridSize) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
   }
-  
-  if (dom.btnStartSnake) {
-    dom.btnStartSnake.addEventListener('click', startSnakeGame);
+
+  // Move snake
+  const head = { 
+    x: snakeGameState.snake[0].x + snakeGameState.dx, 
+    y: snakeGameState.snake[0].y + snakeGameState.dy 
+  };
+
+  // Wall collisions
+  if (head.x < 0 || head.x >= snakeGameState.tileCountX || head.y < 0 || head.y >= snakeGameState.tileCountY) {
+    handleCanvasGameOver(snakeGameState.score, 'Snake');
+    return;
   }
-  
-  window.addEventListener('keydown', (e) => {
-    // Only capture arrows if arcade modal is open
-    if (dom.modalArcade && !dom.modalArcade.classList.contains('hidden')) {
-      // Prevent default scrolling
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault();
-      }
-      
-      switch (e.key) {
-        case 'ArrowUp':
-          if (snakeGameState.dy !== 1) { snakeGameState.dx = 0; snakeGameState.dy = -1; }
-          break;
-        case 'ArrowDown':
-          if (snakeGameState.dy !== -1) { snakeGameState.dx = 0; snakeGameState.dy = 1; }
-          break;
-        case 'ArrowLeft':
-          if (snakeGameState.dx !== 1) { snakeGameState.dx = -1; snakeGameState.dy = 0; }
-          break;
-        case 'ArrowRight':
-          if (snakeGameState.dx !== -1) { snakeGameState.dx = 1; snakeGameState.dy = 0; }
-          break;
-      }
+
+  // Self collision
+  for (let i = 0; i < snakeGameState.snake.length; i++) {
+    if (head.x === snakeGameState.snake[i].x && head.y === snakeGameState.snake[i].y) {
+      handleCanvasGameOver(snakeGameState.score, 'Snake');
+      return;
+    }
+  }
+
+  snakeGameState.snake.unshift(head);
+
+  // Check food collision
+  if (head.x === snakeGameState.food.x && head.y === snakeGameState.food.y) {
+    snakeGameState.score += 10;
+    arcadeState.currentGameScore = snakeGameState.score;
+    if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = snakeGameState.score;
+    if (dom.snakeScore) dom.snakeScore.textContent = snakeGameState.score;
+
+    // Spawn new food
+    snakeGameState.food = {
+      x: Math.floor(Math.random() * (snakeGameState.tileCountX - 2)) + 1,
+      y: Math.floor(Math.random() * (snakeGameState.tileCountY - 2)) + 1
+    };
+  } else {
+    snakeGameState.snake.pop();
+  }
+
+  // Draw Food (Apple with glow)
+  const fx = snakeGameState.food.x * snakeGameState.gridSize;
+  const fy = snakeGameState.food.y * snakeGameState.gridSize;
+  ctx.shadowColor = '#f43f5e';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#f43f5e';
+  ctx.beginPath();
+  ctx.arc(fx + snakeGameState.gridSize / 2, fy + snakeGameState.gridSize / 2, snakeGameState.gridSize / 2 - 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Draw Snake
+  snakeGameState.snake.forEach((part, index) => {
+    const px = part.x * snakeGameState.gridSize;
+    const py = part.y * snakeGameState.gridSize;
+    ctx.fillStyle = index === 0 ? '#34d399' : '#10b981';
+    ctx.beginPath();
+    ctx.roundRect(px + 1, py + 1, snakeGameState.gridSize - 2, snakeGameState.gridSize - 2, index === 0 ? 5 : 3);
+    ctx.fill();
+
+    // Eyes on head
+    if (index === 0) {
+      ctx.fillStyle = '#064e3b';
+      ctx.beginPath();
+      ctx.arc(px + 5, py + 5, 2, 0, Math.PI * 2);
+      ctx.arc(px + snakeGameState.gridSize - 5, py + 5, 2, 0, Math.PI * 2);
+      ctx.fill();
     }
   });
+}
+
+// ----------------------------------------------------
+// CANVAS GAME 2: SPACE DEFENDER
+// ----------------------------------------------------
+function initSpaceGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+
+  spaceGameState = {
+    ship: { x: canvas.width / 2 - 16, y: canvas.height - 45, w: 32, h: 28, speed: 6 },
+    lasers: [],
+    enemies: [],
+    particles: [],
+    stars: Array.from({ length: 45 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      speed: Math.random() * 1.5 + 0.5,
+      size: Math.random() * 1.8 + 0.5
+    })),
+    score: 0,
+    lives: 3,
+    keys: { left: false, right: false, fire: false },
+    lastFireTime: 0,
+    enemySpawnTimer: 0
+  };
+
+  updateSpaceLivesUI();
+  if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = '0';
+
+  function loop() {
+    if (!arcadeState.gameRunning) return;
+    updateSpaceGame();
+    arcadeState.canvasAnimId = requestAnimationFrame(loop);
+  }
+  arcadeState.canvasAnimId = requestAnimationFrame(loop);
+}
+
+function updateSpaceLivesUI() {
+  if (dom.arcadeExtraStatVal) {
+    dom.arcadeExtraStatVal.textContent = '❤️'.repeat(Math.max(0, spaceGameState.lives));
+  }
+}
+
+function updateSpaceGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  // Background
+  ctx.fillStyle = '#030712';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw and animate stars
+  ctx.fillStyle = '#94a3b8';
+  spaceGameState.stars.forEach(star => {
+    star.y += star.speed;
+    if (star.y > canvas.height) {
+      star.y = 0;
+      star.x = Math.random() * canvas.width;
+    }
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Move ship
+  if (spaceGameState.keys.left && spaceGameState.ship.x > 5) {
+    spaceGameState.ship.x -= spaceGameState.ship.speed;
+  }
+  if (spaceGameState.keys.right && spaceGameState.ship.x + spaceGameState.ship.w < canvas.width - 5) {
+    spaceGameState.ship.x += spaceGameState.ship.speed;
+  }
+
+  // Auto fire or key fire
+  const now = Date.now();
+  if (spaceGameState.keys.fire && now - spaceGameState.lastFireTime > 220) {
+    spaceGameState.lasers.push({
+      x: spaceGameState.ship.x + spaceGameState.ship.w / 2 - 2,
+      y: spaceGameState.ship.y - 6,
+      w: 4,
+      h: 12,
+      speed: 9
+    });
+    spaceGameState.lastFireTime = now;
+  }
+
+  // Draw Ship
+  ctx.save();
+  ctx.translate(spaceGameState.ship.x, spaceGameState.ship.y);
+  ctx.fillStyle = '#6366f1';
+  ctx.beginPath();
+  ctx.moveTo(16, 0);
+  ctx.lineTo(32, 28);
+  ctx.lineTo(16, 22);
+  ctx.lineTo(0, 28);
+  ctx.closePath();
+  ctx.fill();
+  // Cockpit
+  ctx.fillStyle = '#38bdf8';
+  ctx.beginPath();
+  ctx.arc(16, 12, 4, 0, Math.PI * 2);
+  ctx.fill();
+  // Engine thruster glow
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.moveTo(12, 24);
+  ctx.lineTo(16, 32 + (Math.random() * 5));
+  ctx.lineTo(20, 24);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // Move & Draw Lasers
+  ctx.fillStyle = '#38bdf8';
+  ctx.shadowColor = '#38bdf8';
+  ctx.shadowBlur = 8;
+  for (let i = spaceGameState.lasers.length - 1; i >= 0; i--) {
+    const l = spaceGameState.lasers[i];
+    l.y -= l.speed;
+    ctx.fillRect(l.x, l.y, l.w, l.h);
+    if (l.y < -10) spaceGameState.lasers.splice(i, 1);
+  }
+  ctx.shadowBlur = 0;
+
+  // Spawn Enemies / Asteroids
+  spaceGameState.enemySpawnTimer++;
+  if (spaceGameState.enemySpawnTimer % 45 === 0) {
+    const isAlien = Math.random() > 0.5;
+    spaceGameState.enemies.push({
+      x: Math.random() * (canvas.width - 40) + 10,
+      y: -25,
+      w: isAlien ? 26 : 28,
+      h: isAlien ? 22 : 28,
+      speedY: Math.random() * 1.8 + 1.2,
+      speedX: (Math.random() - 0.5) * 1.2,
+      isAlien: isAlien,
+      hp: isAlien ? 2 : 1,
+      color: isAlien ? '#ec4899' : '#f97316'
+    });
+  }
+
+  // Move & Draw Enemies
+  for (let i = spaceGameState.enemies.length - 1; i >= 0; i--) {
+    const e = spaceGameState.enemies[i];
+    e.y += e.speedY;
+    e.x += e.speedX;
+
+    // Boundary bounces
+    if (e.x < 5 || e.x + e.w > canvas.width - 5) e.speedX *= -1;
+
+    // Draw enemy
+    ctx.fillStyle = e.color;
+    if (e.isAlien) {
+      ctx.beginPath();
+      ctx.roundRect(e.x, e.y, e.w, e.h, 6);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(e.x + 5, e.y + 6, 4, 4);
+      ctx.fillRect(e.x + e.w - 9, e.y + 6, 4, 4);
+    } else {
+      ctx.beginPath();
+      ctx.arc(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Check collision with Lasers
+    for (let j = spaceGameState.lasers.length - 1; j >= 0; j--) {
+      const l = spaceGameState.lasers[j];
+      if (l.x < e.x + e.w && l.x + l.w > e.x && l.y < e.y + e.h && l.y + l.h > e.y) {
+        spaceGameState.lasers.splice(j, 1);
+        e.hp--;
+        if (e.hp <= 0) {
+          // Particles
+          for (let p = 0; p < 8; p++) {
+            spaceGameState.particles.push({
+              x: e.x + e.w / 2,
+              y: e.y + e.h / 2,
+              vx: (Math.random() - 0.5) * 5,
+              vy: (Math.random() - 0.5) * 5,
+              life: 20,
+              color: e.color
+            });
+          }
+          spaceGameState.enemies.splice(i, 1);
+          spaceGameState.score += (e.isAlien ? 25 : 15);
+          arcadeState.currentGameScore = spaceGameState.score;
+          if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = spaceGameState.score;
+          break;
+        }
+      }
+    }
+
+    // Check collision with Ship
+    const ship = spaceGameState.ship;
+    if (e && ship.x < e.x + e.w && ship.x + ship.w > e.x && ship.y < e.y + e.h && ship.y + ship.h > e.y) {
+      spaceGameState.enemies.splice(i, 1);
+      spaceGameState.lives--;
+      updateSpaceLivesUI();
+      if (spaceGameState.lives <= 0) {
+        handleCanvasGameOver(spaceGameState.score, 'Space Defender');
+        return;
+      }
+    }
+
+    // Off screen
+    if (e && e.y > canvas.height + 20) {
+      spaceGameState.enemies.splice(i, 1);
+    }
+  }
+
+  // Draw Particles
+  for (let i = spaceGameState.particles.length - 1; i >= 0; i--) {
+    const p = spaceGameState.particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.life / 20;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+    if (p.life <= 0) spaceGameState.particles.splice(i, 1);
+  }
+}
+
+// ----------------------------------------------------
+// CANVAS GAME 3: FLAPPY CAMPUS
+// ----------------------------------------------------
+function initFlappyGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+
+  flappyGameState = {
+    bird: { x: 70, y: canvas.height / 2, vy: 0, gravity: 0.38, jump: -6.2, radius: 13 },
+    pipes: [],
+    score: 0,
+    frameCount: 0
+  };
+
+  if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = '0';
+
+  function loop() {
+    if (!arcadeState.gameRunning) return;
+    updateFlappyGame();
+    arcadeState.canvasAnimId = requestAnimationFrame(loop);
+  }
+  arcadeState.canvasAnimId = requestAnimationFrame(loop);
+}
+
+function updateFlappyGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  flappyGameState.frameCount++;
+
+  // Background - Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#0f172a');
+  grad.addColorStop(1, '#1e1b4b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Bird physics
+  const b = flappyGameState.bird;
+  b.vy += b.gravity;
+  b.y += b.vy;
+
+  // Floor / Ceiling collision
+  if (b.y + b.radius > canvas.height - 15 || b.y - b.radius < 0) {
+    handleCanvasGameOver(flappyGameState.score, 'Flappy Campus');
+    return;
+  }
+
+  // Spawn Pipes (Styled as stacked Campus textbooks / pillars)
+  if (flappyGameState.frameCount % 90 === 0) {
+    const gap = 110;
+    const minH = 40;
+    const maxH = canvas.height - gap - minH;
+    const topH = Math.floor(Math.random() * (maxH - minH)) + minH;
+    flappyGameState.pipes.push({
+      x: canvas.width,
+      topH: topH,
+      bottomY: topH + gap,
+      w: 52,
+      speed: 2.3,
+      passed: false
+    });
+  }
+
+  // Draw and update pipes
+  for (let i = flappyGameState.pipes.length - 1; i >= 0; i--) {
+    const p = flappyGameState.pipes[i];
+    p.x -= p.speed;
+
+    // Top Textbook Stack
+    ctx.fillStyle = '#4338ca';
+    ctx.beginPath();
+    ctx.roundRect(p.x, 0, p.w, p.topH, [0, 0, 8, 8]);
+    ctx.fill();
+    // Spine detail
+    ctx.fillStyle = '#6366f1';
+    ctx.fillRect(p.x + 4, p.topH - 12, p.w - 8, 8);
+
+    // Bottom Textbook Stack
+    ctx.fillStyle = '#065f46';
+    ctx.beginPath();
+    ctx.roundRect(p.x, p.bottomY, p.w, canvas.height - p.bottomY, [8, 8, 0, 0]);
+    ctx.fill();
+    // Spine detail
+    ctx.fillStyle = '#10b981';
+    ctx.fillRect(p.x + 4, p.bottomY + 4, p.w - 8, 8);
+
+    // Collision check
+    if (b.x + b.radius > p.x && b.x - b.radius < p.x + p.w) {
+      if (b.y - b.radius < p.topH || b.y + b.radius > p.bottomY) {
+        handleCanvasGameOver(flappyGameState.score, 'Flappy Campus');
+        return;
+      }
+    }
+
+    // Score increment
+    if (!p.passed && p.x + p.w < b.x) {
+      p.passed = true;
+      flappyGameState.score++;
+      arcadeState.currentGameScore = flappyGameState.score;
+      if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = flappyGameState.score;
+    }
+
+    if (p.x + p.w < -10) flappyGameState.pipes.splice(i, 1);
+  }
+
+  // Draw Ground
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, canvas.height - 15, canvas.width, 15);
+  ctx.fillStyle = '#10b981';
+  ctx.fillRect(0, canvas.height - 15, canvas.width, 3);
+
+  // Draw Bird (School Mascot)
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(Math.min(Math.PI / 4, Math.max(-Math.PI / 4, b.vy * 0.08)));
+
+  // Body
+  ctx.fillStyle = '#fbbf24';
+  ctx.beginPath();
+  ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eye
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(4, -4, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#000000';
+  ctx.beginPath();
+  ctx.arc(5, -4, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Beak
+  ctx.fillStyle = '#ea580c';
+  ctx.beginPath();
+  ctx.moveTo(8, -1);
+  ctx.lineTo(16, 2);
+  ctx.lineTo(8, 5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Wing
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.ellipse(-4, 2, 6, 4, b.vy < 0 ? -0.4 : 0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ----------------------------------------------------
+// CANVAS GAME 4: BRICK BREAKER
+// ----------------------------------------------------
+function initBrickGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+
+  const rows = 4;
+  const cols = 7;
+  const brickW = (canvas.width - 60) / cols;
+  const brickH = 18;
+  const bricks = [];
+  const colors = ['#f43f5e', '#ec4899', '#8b5cf6', '#3b82f6'];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      bricks.push({
+        x: 30 + c * brickW,
+        y: 35 + r * (brickH + 8),
+        w: brickW - 6,
+        h: brickH,
+        color: colors[r],
+        points: (4 - r) * 10,
+        status: 1
+      });
+    }
+  }
+
+  brickGameState = {
+    paddle: { x: canvas.width / 2 - 40, y: canvas.height - 35, w: 80, h: 12, speed: 7 },
+    ball: { x: canvas.width / 2, y: canvas.height - 60, vx: 3.5, vy: -3.5, radius: 6 },
+    bricks: bricks,
+    score: 0,
+    lives: 3,
+    keys: { left: false, right: false }
+  };
+
+  updateBrickLivesUI();
+  if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = '0';
+
+  function loop() {
+    if (!arcadeState.gameRunning) return;
+    updateBrickGame();
+    arcadeState.canvasAnimId = requestAnimationFrame(loop);
+  }
+  arcadeState.canvasAnimId = requestAnimationFrame(loop);
+}
+
+function updateBrickLivesUI() {
+  if (dom.arcadeExtraStatVal) {
+    dom.arcadeExtraStatVal.textContent = '❤️'.repeat(Math.max(0, brickGameState.lives));
+  }
+}
+
+function updateBrickGame() {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  // Clear background
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const p = brickGameState.paddle;
+  const b = brickGameState.ball;
+
+  // Move paddle
+  if (brickGameState.keys.left && p.x > 5) {
+    p.x -= p.speed;
+  }
+  if (brickGameState.keys.right && p.x + p.w < canvas.width - 5) {
+    p.x += p.speed;
+  }
+
+  // Draw Paddle
+  ctx.fillStyle = '#6366f1';
+  ctx.beginPath();
+  ctx.roundRect(p.x, p.y, p.w, p.h, 6);
+  ctx.fill();
+
+  // Move Ball
+  b.x += b.vx;
+  b.y += b.vy;
+
+  // Wall bounces
+  if (b.x - b.radius < 0 || b.x + b.radius > canvas.width) {
+    b.vx = -b.vx;
+  }
+  if (b.y - b.radius < 0) {
+    b.vy = -b.vy;
+  }
+
+  // Paddle bounce with angular control
+  if (b.y + b.radius >= p.y && b.y - b.radius <= p.y + p.h && b.x >= p.x && b.x <= p.x + p.w) {
+    const hitOffset = (b.x - (p.x + p.w / 2)) / (p.w / 2); // -1 to 1
+    const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+    b.vx = hitOffset * speed * 0.85;
+    b.vy = -Math.abs(Math.sqrt(Math.max(4, speed * speed - b.vx * b.vx)));
+  }
+
+  // Bottom death check
+  if (b.y + b.radius > canvas.height) {
+    brickGameState.lives--;
+    updateBrickLivesUI();
+    if (brickGameState.lives <= 0) {
+      handleCanvasGameOver(brickGameState.score, 'Brick Breaker');
+      return;
+    } else {
+      // Reset ball position
+      b.x = p.x + p.w / 2;
+      b.y = p.y - 15;
+      b.vy = -3.5;
+      b.vx = 3 * (Math.random() > 0.5 ? 1 : -1);
+    }
+  }
+
+  // Bricks collision and rendering
+  let remainingBricks = 0;
+  brickGameState.bricks.forEach(brick => {
+    if (brick.status === 1) {
+      remainingBricks++;
+      // Collision check
+      if (b.x > brick.x && b.x < brick.x + brick.w && b.y - b.radius < brick.y + brick.h && b.y + b.radius > brick.y) {
+        brick.status = 0;
+        b.vy = -b.vy;
+        brickGameState.score += brick.points;
+        arcadeState.currentGameScore = brickGameState.score;
+        if (dom.arcadeScoreVal) dom.arcadeScoreVal.textContent = brickGameState.score;
+      }
+
+      // Draw brick
+      ctx.fillStyle = brick.color;
+      ctx.beginPath();
+      ctx.roundRect(brick.x, brick.y, brick.w, brick.h, 4);
+      ctx.fill();
+    }
+  });
+
+  // Level cleared check
+  if (remainingBricks === 0) {
+    handleCanvasGameOver(brickGameState.score, 'Brick Breaker');
+    return;
+  }
+
+  // Draw Ball
+  ctx.fillStyle = '#f8fafc';
+  ctx.shadowColor = '#818cf8';
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+/**
+ * Draw initial preview on canvas before game starts
+ */
+function drawCanvasGameInitialFrame(gameId) {
+  const canvas = dom.arcadeGameCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PRESS PLAY TO START MINIGAME', canvas.width / 2, canvas.height / 2);
+}
+
+/**
+ * Share score or invite friends to play game in the chat channel
+ */
+function shareArcadeInChat() {
+  const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+  if (!game) return;
+
+  let messageText = '';
+  if (game.type === 'web') {
+    messageText = `🎮 Who wants to play **${game.title}**? Jump into the arena with me at ${game.url} !`;
+  } else {
+    const score = arcadeState.currentGameScore || arcadeState.highScores[game.id] || 0;
+    messageText = `🕹️ I scored **${score} points** in **${game.title}** in the Campus Arcade! Can anyone beat my score?`;
+  }
+
+  if (dom.messageInput) {
+    dom.messageInput.value = messageText;
+    sendMessage();
+    appendSystemNotice(`📢 Shared ${game.title} challenge into #${state.currentRoom || 'chat'}!`);
+  }
+}
+
+/**
+ * Master Setup for Campus Arcade Controls & Listeners
+ */
+function setupArcadeSystem() {
+  // 1. Header Open / Close Buttons
+  if (dom.btnOpenArcade) {
+    dom.btnOpenArcade.addEventListener('click', () => {
+      openArcadeModal();
+    });
+  }
+
+  if (dom.btnCloseArcade) {
+    dom.btnCloseArcade.addEventListener('click', () => {
+      closeArcadeModal();
+    });
+  }
+
+  // 2. Filter tabs in header and mobile
+  if (dom.arcadeFilterBtns) {
+    dom.arcadeFilterBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const filter = btn.dataset.filter || 'all';
+        arcadeState.activeFilter = filter;
+        dom.arcadeFilterBtns.forEach(b => {
+          if (b.dataset.filter === filter) {
+            b.classList.add('active', 'bg-indigo-600', 'text-white');
+            b.classList.remove('bg-slate-950', 'text-slate-400');
+          } else {
+            b.classList.remove('active', 'bg-indigo-600', 'text-white');
+            b.classList.add('text-slate-400');
+          }
+        });
+        renderArcadeGamesList();
+      });
+    });
+  }
+
+  // 3. Search filter input
+  if (dom.arcadeSearchInput) {
+    dom.arcadeSearchInput.addEventListener('input', (e) => {
+      arcadeState.searchQuery = e.target.value.trim();
+      renderArcadeGamesList();
+    });
+  }
+
+  // 4. Play button in canvas overlay
+  if (dom.btnArcadeStartGame) {
+    dom.btnArcadeStartGame.addEventListener('click', () => {
+      startActiveCanvasGame();
+    });
+  }
+  if (dom.btnStartSnake) {
+    dom.btnStartSnake.addEventListener('click', () => {
+      startActiveCanvasGame();
+    });
+  }
+
+  // 5. Stage Actions: Reload / Restart
+  if (dom.btnArcadeReload) {
+    dom.btnArcadeReload.addEventListener('click', () => {
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.type === 'web') {
+        if (dom.arcadeWebIframe) {
+          dom.arcadeWebIframe.src = dom.arcadeWebIframe.src;
+        }
+      } else {
+        startActiveCanvasGame();
+      }
+    });
+  }
+
+  // 6. Stage Actions: Fullscreen toggle
+  if (dom.btnArcadeFullscreen) {
+    dom.btnArcadeFullscreen.addEventListener('click', () => {
+      const target = dom.arcadeStageViewport || dom.modalArcade;
+      if (!document.fullscreenElement) {
+        if (target.requestFullscreen) target.requestFullscreen();
+      } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+      }
+    });
+  }
+
+  // 7. Stage Actions: Share in Chat
+  if (dom.btnArcadeShareChat) {
+    dom.btnArcadeShareChat.addEventListener('click', shareArcadeInChat);
+  }
+
+  // 8. Global Keyboard Controller
+  window.addEventListener('keydown', (e) => {
+    if (!dom.modalArcade || dom.modalArcade.classList.contains('hidden')) return;
+
+    const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+    if (!game || game.type !== 'canvas') return;
+
+    // Prevent default page scroll for game keys
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd'].includes(e.key)) {
+      e.preventDefault();
+    }
+
+    if (game.id === 'snake') {
+      if ((e.key === 'ArrowUp' || e.key === 'w') && snakeGameState.dy !== 1) {
+        snakeGameState.dx = 0; snakeGameState.dy = -1;
+      } else if ((e.key === 'ArrowDown' || e.key === 's') && snakeGameState.dy !== -1) {
+        snakeGameState.dx = 0; snakeGameState.dy = 1;
+      } else if ((e.key === 'ArrowLeft' || e.key === 'a') && snakeGameState.dx !== 1) {
+        snakeGameState.dx = -1; snakeGameState.dy = 0;
+      } else if ((e.key === 'ArrowRight' || e.key === 'd') && snakeGameState.dx !== -1) {
+        snakeGameState.dx = 1; snakeGameState.dy = 0;
+      }
+    } else if (game.id === 'space') {
+      if (e.key === 'ArrowLeft' || e.key === 'a') spaceGameState.keys.left = true;
+      if (e.key === 'ArrowRight' || e.key === 'd') spaceGameState.keys.right = true;
+      if (e.key === ' ' || e.key === 'ArrowUp') spaceGameState.keys.fire = true;
+    } else if (game.id === 'flappy') {
+      if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') {
+        flappyGameState.bird.vy = flappyGameState.bird.jump;
+      }
+    } else if (game.id === 'brick') {
+      if (e.key === 'ArrowLeft' || e.key === 'a') brickGameState.keys.left = true;
+      if (e.key === 'ArrowRight' || e.key === 'd') brickGameState.keys.right = true;
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (!dom.modalArcade || dom.modalArcade.classList.contains('hidden')) return;
+    const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+    if (!game || game.type !== 'canvas') return;
+
+    if (game.id === 'space') {
+      if (e.key === 'ArrowLeft' || e.key === 'a') spaceGameState.keys.left = false;
+      if (e.key === 'ArrowRight' || e.key === 'd') spaceGameState.keys.right = false;
+      if (e.key === ' ' || e.key === 'ArrowUp') spaceGameState.keys.fire = false;
+    } else if (game.id === 'brick') {
+      if (e.key === 'ArrowLeft' || e.key === 'a') brickGameState.keys.left = false;
+      if (e.key === 'ArrowRight' || e.key === 'd') brickGameState.keys.right = false;
+    }
+  });
+
+  // 9. Mobile Touch Controller Pad
+  if (dom.btnTouchLeft) {
+    dom.btnTouchLeft.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'snake' && snakeGameState.dx !== 1) { snakeGameState.dx = -1; snakeGameState.dy = 0; }
+      if (game?.id === 'space') spaceGameState.keys.left = true;
+      if (game?.id === 'brick') brickGameState.keys.left = true;
+    });
+    dom.btnTouchLeft.addEventListener('pointerup', () => {
+      spaceGameState.keys.left = false;
+      brickGameState.keys.left = false;
+    });
+  }
+  if (dom.btnTouchRight) {
+    dom.btnTouchRight.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'snake' && snakeGameState.dx !== -1) { snakeGameState.dx = 1; snakeGameState.dy = 0; }
+      if (game?.id === 'space') spaceGameState.keys.right = true;
+      if (game?.id === 'brick') brickGameState.keys.right = true;
+    });
+    dom.btnTouchRight.addEventListener('pointerup', () => {
+      spaceGameState.keys.right = false;
+      brickGameState.keys.right = false;
+    });
+  }
+  if (dom.btnTouchUp) {
+    dom.btnTouchUp.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'snake' && snakeGameState.dy !== 1) { snakeGameState.dx = 0; snakeGameState.dy = -1; }
+      if (game?.id === 'flappy') flappyGameState.bird.vy = flappyGameState.bird.jump;
+    });
+  }
+  if (dom.btnTouchDown) {
+    dom.btnTouchDown.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'snake' && snakeGameState.dy !== -1) { snakeGameState.dx = 0; snakeGameState.dy = 1; }
+    });
+  }
+  if (dom.btnTouchAction) {
+    dom.btnTouchAction.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'space') spaceGameState.keys.fire = true;
+      if (game?.id === 'flappy') flappyGameState.bird.vy = flappyGameState.bird.jump;
+    });
+    dom.btnTouchAction.addEventListener('pointerup', () => {
+      spaceGameState.keys.fire = false;
+    });
+  }
+
+  // Mouse / Touch paddle guidance on canvas for Brick Breaker & Flappy tap
+  if (dom.arcadeGameCanvas) {
+    dom.arcadeGameCanvas.addEventListener('pointerdown', (e) => {
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'flappy') {
+        flappyGameState.bird.vy = flappyGameState.bird.jump;
+      } else if (game?.id === 'space') {
+        spaceGameState.keys.fire = true;
+        setTimeout(() => { spaceGameState.keys.fire = false; }, 100);
+      }
+    });
+
+    dom.arcadeGameCanvas.addEventListener('pointermove', (e) => {
+      const game = ARCADE_GAMES.find(g => g.id === arcadeState.activeGameId);
+      if (game?.id === 'brick') {
+        const rect = dom.arcadeGameCanvas.getBoundingClientRect();
+        const scaleX = dom.arcadeGameCanvas.width / rect.width;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        brickGameState.paddle.x = Math.max(5, Math.min(dom.arcadeGameCanvas.width - brickGameState.paddle.w - 5, mouseX - brickGameState.paddle.w / 2));
+      }
+    });
+  }
+}
+
+// Backward compatibility helper
+function setupSnakeControls() {
+  setupArcadeSystem();
 }
 
 // ==========================================
 // SLASH COMMANDS
 // ==========================================
 const SLASH_COMMANDS = [
+  { cmd: '/arcade', desc: 'Open Campus Arcade & 3D arenas' },
+  { cmd: '/games', desc: 'Browse minigames (FPS 2, Snake, High Fly)' },
   { cmd: '/gif', desc: 'Send a GIF (e.g. /gif cats)' },
   { cmd: '/clear', desc: 'Clear local chat history' },
   { cmd: '/help', desc: 'Show available commands' },

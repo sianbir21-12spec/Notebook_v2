@@ -1,6 +1,6 @@
 {
   "name": "School Friend Group Chat",
-  "description": "Real-time web chat application for school friend groups with Express, Socket.IO channels, service worker browser push notifications for background and inactive channel alerts, dynamic unread message count badges, campus administration and moderation console, typing indicators, presence tracking, camera photo capture, customizable themes, and Firebase Authentication.",
+  "description": "Real-time web chat application for school friend groups with Express, Socket.IO channels, an expanded Campus Arcade featuring retro minigames (Snake, Space Defender, Flappy Campus, Brick Breaker) and featured web games (fps2.zeabur.app, fp.zeabur.app, highfly.zeabur.app), browser push notifications, campus moderation console, camera photo sharing, and customizable themes.",
   "requestFramePermissions": [
     "camera"
   ],
